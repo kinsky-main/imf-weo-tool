@@ -1,0 +1,1881 @@
+<?xml version="1.0" encoding="utf-8"?>
+<application xmlns:xml="http://www.w3.org/XML/1998/namespace" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://wadl.dev.java.net/2009/02 http://www.w3.org/Submission/wadl/wadl.xsd" xmlns="http://wadl.dev.java.net/2009/02">
+  <doc title="SDMX 3.0 API">SDMX version 3.0 introduces new features, improvements and changes to the information model, structural metadata artifacts, and data queries. Learn more about SDMX 3.0 changes [here](https://sdmx.org/wp-content/uploads/SDMX_3-0-0_Major_Changes_FINAL-1_0.pdf).
+
+The IMF API allows developers to build applications and integrate IMF data. You can use the IMF APIs to import economic and financial data from databases available on http://data.imf.org/ into your data systems or applications. For additional information on working with the API, refer to the [Help here](https://datasupport.imf.org/knowledge?id=knowledge_category&amp;sys_kb_id=&amp;category_id=9959b2bc1b6391903dba646fbd4bcb6a). For questions, contact datahelp@imf.org.</doc>
+  <resources base="https://api.imf.org/external/sdmx/3.0">
+    <resource path="/structure/{structureType}/{agencyID}/{resourceID}/{version}">
+      <doc title="Structure Query [Structure Type, Agency, Resource, Version]">Structure queries when no item is specified. The item is equivalent to "*".
+
+Structure queries in SDMX allow you to retrieve structural metadata at various levels of granularity, from all structural metadata available in the source to a single code from a particular version of a particular codelist maintained by a particular agency.
+</doc>
+      <param name="structureType" style="template" type="xs:string" default="codelist" required="true">
+        <doc>The type of structural metadata (e.g. codelist, dataflow, etc.)</doc>
+        <option value="datastructure" />
+        <option value="metadatastructure" />
+        <option value="dataflow" />
+        <option value="metadataflow" />
+        <option value="provisionagreement" />
+        <option value="structureset" />
+        <option value="process" />
+        <option value="categorisation" />
+        <option value="dataconstraint" />
+        <option value="metadataconstraint" />
+        <option value="conceptscheme" />
+        <option value="codelist" />
+        <option value="categoryscheme" />
+        <option value="hierarchy" />
+        <option value="hierarchyassociation" />
+        <option value="agencyscheme" />
+        <option value="dataproviderscheme" />
+        <option value="dataconsumerscheme" />
+        <option value="organisationunitscheme" />
+        <option value="transformationscheme" />
+        <option value="rulesetscheme" />
+        <option value="userdefinedoperatorscheme" />
+        <option value="customtypescheme" />
+        <option value="namepersonalisationscheme" />
+        <option value="vtlmappingscheme" />
+        <option value="valuelist" />
+        <option value="structuremap" />
+        <option value="representationmap" />
+        <option value="conceptschememap" />
+        <option value="categoryschememap" />
+        <option value="organisationschememap" />
+        <option value="reportingtaxonomymap" />
+        <option value="*" />
+      </param>
+      <param name="agencyID" style="template" type="xs:array" default="IMF" required="true">
+        <doc>The maintainer(s) of the artefacts.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available maintainers.
+</doc>
+      </param>
+      <param name="resourceID" style="template" type="xs:array" default="CL_COUNTRY" required="true">
+        <doc>The artefact ID(s).
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available artefacts.
+</doc>
+      </param>
+      <param name="version" style="template" type="xs:array" default="+" required="true">
+        <doc>The version(s) of the artefact.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available artefacts.
+
+`+` can be used to retrieve the latest stable version.
+
+`~` can be used to retrieve the latest version, regardless of its status (stable, draft, etc.).
+</doc>
+      </param>
+      <method name="GET">
+        <request>
+          <param name="detail" style="query" type="xs:string" default="full">
+            <doc>This attribute specifies the desired amount of information to be returned. For example, it is possible to instruct the web service to return only basic information about the maintainable artefact (i.e.: id, agency id, version and name). Most notably, items of item schemes will not be returned (for example, it will not return the codes in a code list query).
+
+Possible values are:
+
+`full` - all available information for all returned artefacts should be returned. Returned extended codelists are to be resolved, i.e. include all inherited codes, and must not include the CodelistExtension property. As the inherited codelists must be resolved, they should not be returned a second time as separated codelists.
+
+`allstubs` - all returned artefacts should be returned as stubs, i.e. only containing identification information and the artefacts' name.
+
+`referencestubs` - same as full with the exception that referenced artefacts should be returned only as stubs, i.e. only containing identification information and the artefacts' name.
+
+`allcompletestubs` all returned artefacts should be returned as complete stubs, i.e. only containing identification information, the artefacts' name, description and annotations.
+
+`referencecompletestubs` - same as full with the exception that referenced artefacts should be returned as complete stubs, i.e. only containing identification information, the artefacts' name, description and annotations.
+
+`referencepartial` - same as full with the exception that referenced item schemes should only include items used by the artefact to be returned.
+
+`raw` - same as full with the exception that the returned extended codelists are not resolved and must include the CodelistExtension property, and if referenced codelists or descendants are to be returned then they include also all inherited codelists.</doc>
+            <option value="full" />
+            <option value="allstubs" />
+            <option value="referencestubs" />
+            <option value="allcompletestubs" />
+            <option value="referencecompletestubs" />
+            <option value="referencepartial" />
+            <option value="raw" />
+          </param>
+          <param name="references" style="query" type="xs:array" default="none">
+            <doc>This attribute instructs the web service to return (or not) the artefacts referenced by the artefact to be returned (for example, the code lists and concepts used by the data structure definition matching the query), as well as the artefacts that use the matching artefact (for example, the dataflows that use the data structure definition matching the query).
+
+Possible values are:
+
+`none` - no references will be returned
+
+`parents` - the artefacts that use the artefact matching the query
+
+`parentsandsiblings` - the artefacts that use the artefact matching the query, as well as the artefacts referenced by these artefacts
+
+`ancestors` - the artefacts that use the artefact matching the query, up to any level
+
+`children` - artefacts referenced by the artefact to be returned
+
+`descendants` - references of references, up to any level, will also be returned
+
+`all` - the combination of parentsandsiblings and descendants.
+
+In addition, a concrete type of resource may also be used (for example, `references`=`codelist`).</doc>
+          </param>
+          <param name="asOf" style="query" type="xs:string">
+            <doc>Format - date-time (as date-time in RFC3339). Retrieve the resource as it was at the supplied point in time (aka time travel).
+</doc>
+          </param>
+          <param name="Accept" style="header" type="xs:string">
+            <doc>Specifies the output format. 
+
+`application/json` (the default) indicates that output format is a json.
+</doc>
+            <option value="application/json" />
+            <option value="application/xml" />
+          </param>
+        </request>
+        <response status="200">
+          <doc>OK</doc>
+          <representation mediaType="application/json">
+            <doc>{
+  "data": {
+    "codeLists": [
+      {
+        "agencyID": "SDMX",
+        "annotations": [
+          {
+            "id": "origin",
+            "text": null,
+            "title": null,
+            "type": null,
+            "value": "INTEGRATION"
+          },
+          {
+            "id": "isFinal",
+            "text": null,
+            "title": null,
+            "type": null,
+            "value": null
+          },
+          {
+            "id": "lastUpdatedAt",
+            "text": null,
+            "title": null,
+            "type": null,
+            "value": "2023-02-21T07:31:30"
+          }
+        ],
+        "codes": [
+          {
+            "annotations": [],
+            "description": "To be used for data collected or disseminated every year.",
+            "descriptions": {
+              "en": "To be used for data collected or disseminated every year."
+            },
+            "id": "A",
+            "name": "Annual",
+            "names": {
+              "en": "Annual"
+            }
+          }
+        ],
+        "description": "This code list provides a set of values indicating the \\\"frequency\\\" of the data (e.g. weekly, monthly, quarterly). The concept \\u201Cfrequency\\u201D may refer to various stages in the production process, e.g. data collection or data dissemination. For example, a time series could be disseminated at annual frequency but the underlying data are compiled monthly. The code list is applicable for all different uses of \\\"frequency\\\". This code list was formally adopted on 4 December 2013. More information about and supporting material for this code list and SDMX code lists in general (e.g. list of generic codes for expressing general concepts like \\\"Total\\\", \\\"Unknown\\\", etc.; syntaxes for the creation of further codes; general guidelines for the creation of SDMX code lists) can be found at this address: https://sdmx.org/?page_id=4345.",
+        "descriptions": {
+          "en": "This code list provides a set of values indicating the \\\"frequency\\\" of the data (e.g. weekly, monthly, quarterly). The concept \\u201Cfrequency\\u201D may refer to various stages in the production process, e.g. data collection or data dissemination. For example, a time series could be disseminated at annual frequency but the underlying data are compiled monthly. The code list is applicable for all different uses of \\\"frequency\\\". This code list was formally adopted on 4 December 2013. More information about and supporting material for this code list and SDMX code lists in general (e.g. list of generic codes for expressing general concepts like \\\"Total\\\", \\\"Unknown\\\", etc.; syntaxes for the creation of further codes; general guidelines for the creation of SDMX code lists) can be found at this address: https://sdmx.org/?page_id=4345."
+        },
+        "id": "CL_FREQ",
+        "isPartial": true,
+        "links": [
+          {
+            "rel": "self",
+            "type": "codelist",
+            "urn": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.0)"
+          }
+        ],
+        "name": "Frequency",
+        "names": {
+          "en": "Frequency"
+        },
+        "version": "2.0"
+      }
+    ]
+  },
+  "meta": {
+    "contentLanguages": [
+      "en"
+    ],
+    "id": "IDREF9418",
+    "prepared": "2023-08-17T12:34:35",
+    "schema": "https://raw.githubusercontent.com/sdmx-twg/sdmx-json/sdmx3.0.0/metadata-message/tools/schemas/2.0.0/sdmx-json-metadata-schema.json",
+    "sender": {
+      "id": "unknown"
+    },
+    "test": false
+  }
+}</doc>
+          </representation>
+          <representation mediaType="application/xml">
+            <doc>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;message:Structure xmlns:message="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/message" xmlns:structure="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/structure" xmlns:common="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/common" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xml="http://www.w3.org/XML/1998/namespace" xsi:schemaLocation="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/message ../../schemas/SDMXMessage.xsd"&gt;
+    &lt;message:Header&gt;
+        &lt;message:ID&gt;IDREF6142&lt;/message:ID&gt;
+        &lt;message:Test&gt;false&lt;/message:Test&gt;
+        &lt;message:Prepared&gt;2023-08-17T14:39:32.567530217Z&lt;/message:Prepared&gt;
+        &lt;message:Sender id="unknown"/&gt;
+    &lt;/message:Header&gt;
+    &lt;message:Structures&gt;
+        &lt;structure:Codelists&gt;
+            &lt;structure:Codelist urn="urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.0)" agencyID="SDMX" id="CL_FREQ" version="2.0" isExternalReference="false" isPartial="true"&gt;
+                &lt;common:Annotations&gt;
+                    &lt;common:Annotation id="origin"&gt;
+                        &lt;common:AnnotationValue&gt;INTEGRATION&lt;/common:AnnotationValue&gt;
+                    &lt;/common:Annotation&gt;
+                    &lt;common:Annotation id="isFinal"/&gt;
+                    &lt;common:Annotation id="lastUpdatedAt"&gt;
+                        &lt;common:AnnotationValue&gt;2023-02-21T19:31:30.726036Z&lt;/common:AnnotationValue&gt;
+                    &lt;/common:Annotation&gt;
+                &lt;/common:Annotations&gt;
+                &lt;common:Link url="urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.0)" type="codelist" rel="self"/&gt;
+                &lt;common:Name xml:lang="en"&gt;Frequency&lt;/common:Name&gt;
+                &lt;common:Description xml:lang="en"&gt;This code list provides a set of values indicating the "frequency" of the data (e.g. weekly, monthly, quarterly). The concept “frequency” may refer to various stages in the production process, e.g. data collection or data dissemination. For example, a time series could be disseminated at annual frequency but the underlying data are compiled monthly. The code list is applicable for all different uses of "frequency". This code list was formally adopted on 4 December 2013. More information about and supporting material for this code list and SDMX code lists in general (e.g. list of generic codes for expressing general concepts like "Total", "Unknown", etc.; syntaxes for the creation of further codes; general guidelines for the creation of SDMX code lists) can be found at this address: https://sdmx.org/?page_id=4345.&lt;/common:Description&gt;
+                &lt;structure:Code id="A"&gt;
+                    &lt;common:Name xml:lang="en"&gt;Annual&lt;/common:Name&gt;
+                    &lt;common:Description xml:lang="en"&gt;To be used for data collected or disseminated every year.&lt;/common:Description&gt;
+                &lt;/structure:Code&gt;
+            &lt;/structure:Codelist&gt;
+        &lt;/structure:Codelists&gt;
+    &lt;/message:Structures&gt;
+&lt;/message:Structure&gt;</doc>
+          </representation>
+        </response>
+      </method>
+    </resource>
+    <resource path="/availability/{context}/{agencyID}/{resourceID}/{version}/{key}/{componentID}">
+      <doc title="Data Availability Query">See which data would match a query, without actually retrieving these data.
+
+This can be used, for example, to build a data query form that enables users of the UI to create a data query by selecting dimension values. 
+For example the user is able to click 'Reporting Country' and then select the codes 'United Kingdom', 'Greece', and 'Switzerland'.
+
+The query returns a `Constraint`, i.e. structural metadata, and is therefore similar to the other structural metadata queries but 
+the query itself is more akin to a data query.
+</doc>
+      <param name="context" style="template" type="xs:string" default="dataflow" required="true">
+        <doc>The context for data retrieval. All possible contexts can be selected using `*`.</doc>
+        <option value="datastructure" />
+        <option value="dataflow" />
+        <option value="provisionagreement" />
+        <option value="*" />
+      </param>
+      <param name="agencyID" style="template" type="xs:array" default="IMF.STA" required="true">
+        <doc>The maintainer(s) of the artefacts.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available maintainers.
+</doc>
+      </param>
+      <param name="resourceID" style="template" type="xs:array" default="CPI" required="true">
+        <doc>The artefact ID(s).
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available artefacts.
+</doc>
+      </param>
+      <param name="version" style="template" type="xs:array" default="+" required="true">
+        <doc>The version(s) of the artefact.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available artefacts.
+
+`+` can be used to retrieve the latest stable version.
+
+`~` can be used to retrieve the latest version, regardless of its status (stable, draft, etc.).
+</doc>
+      </param>
+      <param name="key" style="template" type="xs:array" default="USA.CPI.*.IX.M" required="true">
+        <doc>The combination of dimension values identifying series or slices of the cube (for example `D.USD.EUR.SP00.A`).
+
+Multiple values are possible. Wildcards are supported using `*` (`D.*.EUR.SP00.A`).
+</doc>
+      </param>
+      <param name="componentID" style="template" type="xs:array" default="COICOP_1999" required="true">
+        <doc>The ID of the dimension for which to obtain availability information.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available dimensions.
+</doc>
+      </param>
+      <method name="GET">
+        <request>
+          <param name="c" style="query" type="xs:object">
+            <doc>Filter data by component value (e.g. c[FREQ]=A).
+
+Multiple values are supported.
+
+In addition, operators may be used:
+
+Operator | Meaning | Note
+-- | -- | --
+eq | Equals | Default if no operator is specified and there is only one value (e.g. `c[FREQ]=M` is equivalent to `c[FREQ]=eq:M`)
+ne | Not equal to |
+lt | Less than |
+le | Less than or equal to |
+gt | Greater than |
+ge | Greater than or equal to |
+co | Contains |
+nc | Does not contain |
+sw | Starts with |
+ew | Ends with |
+
+Operators appear as prefix to the component value(s) and are separated from it by a `:` (e.g. `c[TIME_PERIOD]=ge:2020-01+le:2020-12`).
+</doc>
+          </param>
+          <param name="updatedAfter" style="query" type="xs:string">
+            <doc>Format - date-time (as date-time in RFC3339). The last time the query was performed by the client. 
+
+If this parameter is used, the returned message should only include the dimension values for the data that have changed since that point in time (updates and revisions).
+</doc>
+          </param>
+          <param name="references" style="query" type="xs:string" default="none">
+            <doc>Instructs the web service to return (or not) the artefacts referenced by the ContentConstraint to be returned.
+
+Multiple values are supported.
+</doc>
+            <option value="none" />
+            <option value="all" />
+            <option value="datastructure" />
+            <option value="conceptscheme" />
+            <option value="codelist" />
+            <option value="dataproviderscheme" />
+            <option value="dataflow" />
+          </param>
+          <param name="mode" style="query" type="xs:string" default="exact">
+            <doc>Instructs the web service to return a ContentConstraint which defines a Cube Region containing values which will be returned by executing the query (`exact`) vs a Cube Region showing what values remain valid selections that could be added to the data query (`available`).
+</doc>
+            <option value="exact" />
+            <option value="available" />
+          </param>
+        </request>
+        <response status="200">
+          <doc>OK</doc>
+          <representation mediaType="application/json">
+            <doc>{
+  "data": {
+    "dataConstraints": [
+      {
+        "agencyID": "QUANTHUB",
+        "annotations": [
+          {
+            "id": "series_count",
+            "text": null,
+            "title": "397820",
+            "type": "sdmx_metrics",
+            "value": null
+          },
+          {
+            "id": "time_period_start",
+            "text": null,
+            "title": "2018-01-01",
+            "type": "sdmx_metrics",
+            "value": null
+          },
+          {
+            "id": "time_period_end",
+            "text": null,
+            "title": "2021-01-01",
+            "type": "sdmx_metrics",
+            "value": null
+          }
+        ],
+        "constraintAttachment": {
+          "dataStructures": [
+            "urn:sdmx:org.sdmx.infomodel.datastructure.DataStructure=QUANTHUB:ECOFIN_DSD(1.2)"
+          ]
+        },
+        "cubeRegions": [
+          {
+            "components": [
+              {
+                "id": "FREQ",
+                "include": false,
+                "removePrefix": false,
+                "values": [
+                  {
+                    "value": "A"
+                  },
+                  {
+                    "value": "Q"
+                  }
+                ]
+              }
+            ],
+            "include": true,
+            "keyValues": []
+          }
+        ],
+        "description": "Data Availability Constraint",
+        "descriptions": {
+          "en": "Data Availability Constraint"
+        },
+        "id": "BOP6",
+        "links": [
+          {
+            "rel": "self",
+            "type": "dataconstraint",
+            "urn": "urn:sdmx:org.sdmx.infomodel.registry.DataConstraint=QUANTHUB:BOP6(1.2)"
+          }
+        ],
+        "name": "Data Constraint",
+        "names": {
+          "en": "Data Constraint"
+        },
+        "role": "Allowed",
+        "version": "2023-01-02"
+      }
+    ]
+  },
+  "meta": {
+    "contentLanguages": [
+      "en"
+    ],
+    "id": "IDREF9519",
+    "prepared": "2023-08-17T03:03:28",
+    "schema": "https://raw.githubusercontent.com/sdmx-twg/sdmx-json/sdmx3.0.0/metadata-message/tools/schemas/2.0.0/sdmx-json-metadata-schema.json",
+    "sender": {
+      "id": "unknown"
+    },
+    "test": false
+  }
+}</doc>
+          </representation>
+        </response>
+      </method>
+    </resource>
+    <resource path="/data/{context}/{agencyID}/{resourceID}/{version}/{key}">
+      <doc title="Data Query">Data queries allow **retrieving statistical data**. 
+
+Entire datasets can be retrieved or individual observations, or anything in between, using filters on dimensions (including time), attributes and/or measures. 
+
+All data matching a query can be retrieved or only the data that has changed since the last time the same query was performed. 
+
+Using the _includeHistory_ parameter, it is also possible to retrieve previous versions of the data. 
+
+Last but not least, the data retrieved can be packaged in different ways (as time series, cross-sections or as a table), in a variety of formats (JSON, XML, CSV, etc.).
+</doc>
+      <param name="context" style="template" type="xs:string" default="dataflow" required="true">
+        <doc>The context for data retrieval. All possible contexts can be selected using `*`.</doc>
+        <option value="datastructure" />
+        <option value="dataflow" />
+        <option value="provisionagreement" />
+        <option value="*" />
+      </param>
+      <param name="agencyID" style="template" type="xs:array" default="IMF.STA" required="true">
+        <doc>The maintainer(s) of the artefacts.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available maintainers.
+</doc>
+      </param>
+      <param name="resourceID" style="template" type="xs:array" default="CPI" required="true">
+        <doc>The artefact ID(s).
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available artefacts.
+</doc>
+      </param>
+      <param name="version" style="template" type="xs:array" default="+" required="true">
+        <doc>The version(s) of the artefact.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available artefacts.
+
+`+` can be used to retrieve the latest stable version.
+
+`~` can be used to retrieve the latest version, regardless of its status (stable, draft, etc.).
+</doc>
+      </param>
+      <param name="key" style="template" type="xs:array" default="USA.CPI.*.IX.M" required="true">
+        <doc>The combination of dimension values identifying series or slices of the cube (for example `D.USD.EUR.SP00.A`).
+
+Multiple values are possible. Wildcards are supported using `*` (`D.*.EUR.SP00.A`).
+</doc>
+      </param>
+      <method name="GET">
+        <request>
+          <param name="c" style="query" type="xs:object">
+            <doc>Filter data by component value (e.g. c[FREQ]=A).
+
+Multiple values are supported.
+
+In addition, operators may be used:
+
+Operator | Meaning | Note
+-- | -- | --
+eq | Equals | Default if no operator is specified and there is only one value (e.g. `c[FREQ]=M` is equivalent to `c[FREQ]=eq:M`)
+ne | Not equal to |
+lt | Less than |
+le | Less than or equal to |
+gt | Greater than |
+ge | Greater than or equal to |
+co | Contains |
+nc | Does not contain |
+sw | Starts with |
+ew | Ends with |
+
+Operators appear as prefix to the component value(s) and are separated from it by a `:` (e.g. `c[TIME_PERIOD]=ge:2020-01+le:2020-12`).
+</doc>
+          </param>
+          <param name="updatedAfter" style="query" type="xs:string">
+            <doc>Format - date-time (as date-time in RFC3339). The last time the query was performed by the client. 
+
+If this parameter is used, the returned message should only include the dimension values for the data that have changed since that point in time (updates and revisions).
+</doc>
+          </param>
+          <param name="firstNObservations" style="query" type="xs:integer">
+            <doc>The maximum number of observations to be returned for each of the matching series, starting from the first observation.</doc>
+          </param>
+          <param name="lastNObservations" style="query" type="xs:integer">
+            <doc>The maximum number of observations to be returned for each of the matching series, counting back from the most recent observation.</doc>
+          </param>
+          <param name="dimensionAtObservation" style="query" type="xs:string" default="TIME_PERIOD">
+            <doc>This parameter allows the client to indicate how the data should be packaged by the service.
+
+The options are:
+* For datasets **with** time dimension:
+    * `TIME_PERIOD`: A timeseries view
+    * `AllDimensions`: A flat view of the data.
+* For datasets **without** time dimension:
+    * `AllDimensions`: A flat view of the data.
+    * The ID of any dimension: A cross-sectional view of the data.
+</doc>
+          </param>
+          <param name="attributes" style="query" type="xs:array" default="dsd">
+            <doc>The attributes to be returned. 
+
+For example, it is possible to instruct the web service to return data only (i.e. no attributes).
+</doc>
+          </param>
+          <param name="measures" style="query" type="xs:array" default="all">
+            <doc>The measures to be returned.</doc>
+          </param>
+          <param name="includeHistory" style="query" type="xs:boolean" default="false">
+            <doc>This attribute allows retrieving previous versions of the data, as they were disseminated in the past (*history* or *timeline* functionality).
+</doc>
+          </param>
+          <param name="asOf" style="query" type="xs:string">
+            <doc>Format - date-time (as date-time in RFC3339). Retrieve the resource as it was at the supplied point in time (aka time travel).
+</doc>
+          </param>
+        </request>
+        <response status="200">
+          <doc>OK</doc>
+          <representation mediaType="application/json">
+            <doc>{
+  "data": {
+    "dataSets": [
+      {
+        "action": "Information",
+        "series": {
+          "0:0:0:0:0:0": {
+            "attributes": [
+              null
+            ],
+            "observations": {
+              "0": [
+                "-803260893.854749",
+                0,
+                null
+              ],
+              "1": [
+                "-755969273.743017",
+                0,
+                null
+              ]
+            }
+          }
+        },
+        "structure": 0
+      }
+    ],
+    "structures": [
+      {
+        "annotations": [],
+        "attributes": {
+          "dataSet": [
+            {
+              "id": "COMMENT",
+              "isMandatory": false,
+              "relationship": {
+                "dataflow": {}
+              },
+              "roles": [],
+              "values": []
+            },
+            {
+              "id": "BASE_PER",
+              "isMandatory": false,
+              "relationship": {
+                "dataflow": {}
+              },
+              "roles": [],
+              "values": []
+            }
+          ],
+          "observation": [
+            {
+              "id": "UNIT_MULT",
+              "isMandatory": false,
+              "relationship": {
+                "observation": {}
+              },
+              "roles": [],
+              "values": [
+                {
+                  "id": "6"
+                },
+                {
+                  "id": "0"
+                }
+              ]
+            },
+            {
+              "id": "OBS_STATUS",
+              "isMandatory": false,
+              "relationship": {
+                "observation": {}
+              },
+              "roles": [],
+              "values": []
+            }
+          ],
+          "series": [
+            {
+              "id": "TIME_FORMAT",
+              "isMandatory": false,
+              "relationship": {
+                "dimensions": [
+                  "DATA_DOMAIN",
+                  "REF_AREA",
+                  "INDICATOR",
+                  "COUNTERPART_AREA",
+                  "FREQ",
+                  "DATA_TYPE"
+                ]
+              },
+              "roles": [],
+              "values": []
+            }
+          ]
+        },
+        "dataSets": [
+          0
+        ],
+        "dimensions": {
+          "observation": [
+            {
+              "id": "TIME_PERIOD",
+              "keyPosition": 6,
+              "values": [
+                {
+                  "value": "2011"
+                },
+                {
+                  "value": "2012"
+                }
+              ]
+            }
+          ],
+          "series": [
+            {
+              "id": "DATA_DOMAIN",
+              "keyPosition": 0,
+              "roles": [],
+              "values": [
+                {
+                  "id": "BOP6"
+                }
+              ]
+            },
+            {
+              "id": "REF_AREA",
+              "keyPosition": 1,
+              "roles": [],
+              "values": [
+                {
+                  "id": "1C_355"
+                }
+              ]
+            }
+          ]
+        },
+        "links": [
+          {
+            "title": "Dataflow",
+            "urn": "urn:sdmx:org.sdmx.infomodel.datastructure.Dataflow=IMF:BOP6_PRIVATE(1.2)"
+          },
+          {
+            "title": "DataStructureDefinition",
+            "urn": "urn:sdmx:org.sdmx.infomodel.datastructure.DataStructure=IMF:ECOFIN_DSD(1.2)"
+          }
+        ],
+        "measures": {
+          "observation": [
+            {
+              "id": "OBS_VALUE",
+              "roles": []
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "meta": {}
+}</doc>
+          </representation>
+        </response>
+      </method>
+    </resource>
+    <resource path="/metadata/metadataset/{providerID}/{metadatasetID}/{version}">
+      <doc title="Metadata Query [by Metadatasets]">These queries enable clients to find metadatasets by the identification of the metadataset, enabling clients to checkout specific reports.
+</doc>
+      <param name="providerID" style="template" type="xs:array" default="*" required="true">
+        <doc>The provider of metadata.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available providers.
+</doc>
+      </param>
+      <param name="metadatasetID" style="template" type="xs:array" default="*" required="true">
+        <doc>The artefact ID(s).
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available artefacts.
+</doc>
+      </param>
+      <param name="version" style="template" type="xs:array" default="+" required="true">
+        <doc>The version(s) of the artefact.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available artefacts.
+
+`+` can be used to retrieve the latest stable version.
+
+`~` can be used to retrieve the latest version, regardless of its status (stable, draft, etc.).
+</doc>
+      </param>
+      <method name="GET">
+        <request>
+          <param name="detail" style="query" type="xs:string" default="allstubs">
+            <doc>This attribute specifies the desired amount of information to be returned. For example, it is possible to instruct the web service to return only basic information about the metadataset (i.e.: id, dataprovider id, version and name).
+
+Most notably, metadata attributes of a metadataset will not be returned Possible values are:
+1. `full`: all available information for all returned metadatasets should be returned.
+2. `allstubs`: all returned metadatasets should be returned as stubs, i.e. only containing identification information and the metadataset' name.
+</doc>
+            <option value="allstubs" />
+            <option value="full" />
+          </param>
+          <param name="asOf" style="query" type="xs:string">
+            <doc>Format - date-time (as date-time in RFC3339). Retrieve the resource as it was at the supplied point in time (aka time travel).
+</doc>
+          </param>
+        </request>
+        <response status="200">
+          <doc>OK</doc>
+          <representation mediaType="application/json">
+            <doc>{
+  "data": {
+    "metadataSets": []
+  },
+  "meta": {
+    "contentLanguages": [
+      "en"
+    ],
+    "id": "IDREF7221",
+    "prepared": "2023-08-17T03:11:32",
+    "schema": "https://raw.githubusercontent.com/sdmx-twg/sdmx-json/sdmx3.0.0/metadata-message/tools/schemas/2.0.0/sdmx-json-metadata-schema.json",
+    "sender": {
+      "id": "unknown"
+    },
+    "test": false
+  }
+}</doc>
+          </representation>
+        </response>
+      </method>
+    </resource>
+    <resource path="/metadata/metadataflow/{flowAgencyID}/{flowID}/{flowVersion}/{providerRef}">
+      <doc title="Metadata Query [by Metadataflow]">These queries enable clients to find metadatasets by the collection (metadataflow), optionally filtered by the metadata provider.
+</doc>
+      <param name="flowAgencyID" style="template" type="xs:array" default="*" required="true">
+        <doc>The maintainer(s) of the artefacts.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available maintainers.
+</doc>
+      </param>
+      <param name="flowID" style="template" type="xs:array" default="*" required="true">
+        <doc>The artefact ID(s).
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available artefacts.
+</doc>
+      </param>
+      <param name="flowVersion" style="template" type="xs:array" default="+" required="true">
+        <doc>The version(s) of the artefact.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available artefacts.
+
+`+` can be used to retrieve the latest stable version.
+
+`~` can be used to retrieve the latest version, regardless of its status (stable, draft, etc.).
+</doc>
+      </param>
+      <param name="providerRef" style="template" type="xs:array" default="*" required="true">
+        <doc>The provider of metadata.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available providers.
+</doc>
+      </param>
+      <method name="GET">
+        <request>
+          <param name="detail" style="query" type="xs:string" default="allstubs">
+            <doc>This attribute specifies the desired amount of information to be returned. For example, it is possible to instruct the web service to return only basic information about the metadataset (i.e.: id, dataprovider id, version and name).
+
+Most notably, metadata attributes of a metadataset will not be returned Possible values are:
+1. `full`: all available information for all returned metadatasets should be returned.
+2. `allstubs`: all returned metadatasets should be returned as stubs, i.e. only containing identification information and the metadataset' name.
+</doc>
+            <option value="allstubs" />
+            <option value="full" />
+          </param>
+          <param name="asOf" style="query" type="xs:string">
+            <doc>Format - date-time (as date-time in RFC3339). Retrieve the resource as it was at the supplied point in time (aka time travel).
+</doc>
+          </param>
+        </request>
+        <response status="200">
+          <doc>OK</doc>
+          <representation mediaType="application/json">
+            <doc>{
+  "data": {
+    "metadataSets": []
+  },
+  "meta": {
+    "contentLanguages": [
+      "en"
+    ],
+    "id": "IDREF7221",
+    "prepared": "2023-08-17T03:11:32",
+    "schema": "https://raw.githubusercontent.com/sdmx-twg/sdmx-json/sdmx3.0.0/metadata-message/tools/schemas/2.0.0/sdmx-json-metadata-schema.json",
+    "sender": {
+      "id": "unknown"
+    },
+    "test": false
+  }
+}</doc>
+          </representation>
+        </response>
+      </method>
+    </resource>
+    <resource path="/metadata/structure/{artefactType}/{agencyID}/{resourceID}/{version}">
+      <doc title="Metadata Query [by Structure]">These queries enable clients to request all metadata sets which are reported against one or more structures.
+
+As such the syntax for defining which structures to find metadata for follows the same syntax as the structure queries.
+</doc>
+      <param name="artefactType" style="template" type="xs:string" default="dataflow" required="true">
+        <doc>The type of structural metadata (e.g. codelist, dataflow, etc.)</doc>
+        <option value="datastructure" />
+        <option value="metadatastructure" />
+        <option value="dataflow" />
+        <option value="metadataflow" />
+        <option value="provisionagreement" />
+        <option value="structureset" />
+        <option value="process" />
+        <option value="categorisation" />
+        <option value="dataconstraint" />
+        <option value="metadataconstraint" />
+        <option value="conceptscheme" />
+        <option value="codelist" />
+        <option value="categoryscheme" />
+        <option value="hierarchy" />
+        <option value="hierarchyassociation" />
+        <option value="agencyscheme" />
+        <option value="dataproviderscheme" />
+        <option value="dataconsumerscheme" />
+        <option value="organisationunitscheme" />
+        <option value="transformationscheme" />
+        <option value="rulesetscheme" />
+        <option value="userdefinedoperatorscheme" />
+        <option value="customtypescheme" />
+        <option value="namepersonalisationscheme" />
+        <option value="vtlmappingscheme" />
+        <option value="valuelist" />
+        <option value="structuremap" />
+        <option value="representationmap" />
+        <option value="conceptschememap" />
+        <option value="categoryschememap" />
+        <option value="organisationschememap" />
+        <option value="reportingtaxonomymap" />
+        <option value="*" />
+      </param>
+      <param name="agencyID" style="template" type="xs:array" default="*" required="true">
+        <doc>The maintainer(s) of the artefacts.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available maintainers.
+</doc>
+      </param>
+      <param name="resourceID" style="template" type="xs:array" default="*" required="true">
+        <doc>The artefact ID(s).
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available artefacts.
+</doc>
+      </param>
+      <param name="version" style="template" type="xs:array" default="+" required="true">
+        <doc>The version(s) of the artefact.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available artefacts.
+
+`+` can be used to retrieve the latest stable version.
+
+`~` can be used to retrieve the latest version, regardless of its status (stable, draft, etc.).
+</doc>
+      </param>
+      <method name="GET">
+        <request>
+          <param name="detail" style="query" type="xs:string" default="allstubs">
+            <doc>This attribute specifies the desired amount of information to be returned. For example, it is possible to instruct the web service to return only basic information about the metadataset (i.e.: id, dataprovider id, version and name).
+
+Most notably, metadata attributes of a metadataset will not be returned Possible values are:
+1. `full`: all available information for all returned metadatasets should be returned.
+2. `allstubs`: all returned metadatasets should be returned as stubs, i.e. only containing identification information and the metadataset' name.
+</doc>
+            <option value="allstubs" />
+            <option value="full" />
+          </param>
+          <param name="asOf" style="query" type="xs:string">
+            <doc>Format - date-time (as date-time in RFC3339). Retrieve the resource as it was at the supplied point in time (aka time travel).
+</doc>
+          </param>
+        </request>
+        <response status="200">
+          <doc>OK</doc>
+          <representation mediaType="application/json">
+            <doc>{
+  "data": {
+    "metadataSets": []
+  },
+  "meta": {
+    "contentLanguages": [
+      "en"
+    ],
+    "id": "IDREF7221",
+    "prepared": "2023-08-17T03:11:32",
+    "schema": "https://raw.githubusercontent.com/sdmx-twg/sdmx-json/sdmx3.0.0/metadata-message/tools/schemas/2.0.0/sdmx-json-metadata-schema.json",
+    "sender": {
+      "id": "unknown"
+    },
+    "test": false
+  }
+}</doc>
+          </representation>
+        </response>
+      </method>
+    </resource>
+    <resource path="/structure/{structureType}/{agencyID}/{resourceID}/{version}/{itemID}">
+      <doc title="Structure Query [Structure Type, Agency, Resource, Version, Item]">'Item queries extend structure queries by allowing to retrieve items in item schemes such as particular codes in a codelist.'
+</doc>
+      <param name="structureType" style="template" type="xs:string" default="codelist" required="true">
+        <doc>The type of structural metadata (e.g. codelist, dataflow, etc.)</doc>
+        <option value="datastructure" />
+        <option value="metadatastructure" />
+        <option value="dataflow" />
+        <option value="metadataflow" />
+        <option value="provisionagreement" />
+        <option value="structureset" />
+        <option value="process" />
+        <option value="categorisation" />
+        <option value="dataconstraint" />
+        <option value="metadataconstraint" />
+        <option value="conceptscheme" />
+        <option value="codelist" />
+        <option value="categoryscheme" />
+        <option value="hierarchy" />
+        <option value="hierarchyassociation" />
+        <option value="agencyscheme" />
+        <option value="dataproviderscheme" />
+        <option value="dataconsumerscheme" />
+        <option value="organisationunitscheme" />
+        <option value="transformationscheme" />
+        <option value="rulesetscheme" />
+        <option value="userdefinedoperatorscheme" />
+        <option value="customtypescheme" />
+        <option value="namepersonalisationscheme" />
+        <option value="vtlmappingscheme" />
+        <option value="valuelist" />
+        <option value="structuremap" />
+        <option value="representationmap" />
+        <option value="conceptschememap" />
+        <option value="categoryschememap" />
+        <option value="organisationschememap" />
+        <option value="reportingtaxonomymap" />
+        <option value="*" />
+      </param>
+      <param name="agencyID" style="template" type="xs:array" default="IMF" required="true">
+        <doc>The maintainer(s) of the artefacts.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available maintainers.
+</doc>
+      </param>
+      <param name="resourceID" style="template" type="xs:array" default="CL_COUNTRY" required="true">
+        <doc>The artefact ID(s).
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available artefacts.
+</doc>
+      </param>
+      <param name="version" style="template" type="xs:array" default="+" required="true">
+        <doc>The version(s) of the artefact.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available artefacts.
+
+`+` can be used to retrieve the latest stable version.
+
+`~` can be used to retrieve the latest version, regardless of its status (stable, draft, etc.).
+</doc>
+      </param>
+      <param name="itemID" style="template" type="xs:array" default="CAN,USA" required="true">
+        <doc>The id of the item to be returned. 
+
+Multiple values are possible and `*` can be used as shortcut to select all items.
+</doc>
+      </param>
+      <method name="GET">
+        <request>
+          <param name="detail" style="query" type="xs:string" default="full">
+            <doc>This attribute specifies the desired amount of information to be returned. For example, it is possible to instruct the web service to return only basic information about the maintainable artefact (i.e.: id, agency id, version and name). Most notably, items of item schemes will not be returned (for example, it will not return the codes in a code list query).
+
+Possible values are:
+
+`full` - all available information for all returned artefacts should be returned. Returned extended codelists are to be resolved, i.e. include all inherited codes, and must not include the CodelistExtension property. As the inherited codelists must be resolved, they should not be returned a second time as separated codelists.
+
+`allstubs` - all returned artefacts should be returned as stubs, i.e. only containing identification information and the artefacts' name.
+
+`referencestubs` - same as full with the exception that referenced artefacts should be returned only as stubs, i.e. only containing identification information and the artefacts' name.
+
+`allcompletestubs` all returned artefacts should be returned as complete stubs, i.e. only containing identification information, the artefacts' name, description and annotations.
+
+`referencecompletestubs` - same as full with the exception that referenced artefacts should be returned as complete stubs, i.e. only containing identification information, the artefacts' name, description and annotations.
+
+`referencepartial` - same as full with the exception that referenced item schemes should only include items used by the artefact to be returned.
+
+`raw` - same as full with the exception that the returned extended codelists are not resolved and must include the CodelistExtension property, and if referenced codelists or descendants are to be returned then they include also all inherited codelists.</doc>
+            <option value="full" />
+            <option value="allstubs" />
+            <option value="referencestubs" />
+            <option value="allcompletestubs" />
+            <option value="referencecompletestubs" />
+            <option value="referencepartial" />
+            <option value="raw" />
+          </param>
+          <param name="references" style="query" type="xs:array" default="none">
+            <doc>This attribute instructs the web service to return (or not) the artefacts referenced by the artefact to be returned (for example, the code lists and concepts used by the data structure definition matching the query), as well as the artefacts that use the matching artefact (for example, the dataflows that use the data structure definition matching the query).
+
+Possible values are:
+
+`none` - no references will be returned
+
+`parents` - the artefacts that use the artefact matching the query
+
+`parentsandsiblings` - the artefacts that use the artefact matching the query, as well as the artefacts referenced by these artefacts
+
+`ancestors` - the artefacts that use the artefact matching the query, up to any level
+
+`children` - artefacts referenced by the artefact to be returned
+
+`descendants` - references of references, up to any level, will also be returned
+
+`all` - the combination of parentsandsiblings and descendants.
+
+In addition, a concrete type of resource may also be used (for example, `references`=`codelist`).</doc>
+          </param>
+          <param name="asOf" style="query" type="xs:string">
+            <doc>Format - date-time (as date-time in RFC3339). Retrieve the resource as it was at the supplied point in time (aka time travel).
+</doc>
+          </param>
+          <param name="Accept" style="header" type="xs:string">
+            <doc>Specifies the output format. 
+
+`application/json` (the default) indicates that output format is a json.
+</doc>
+            <option value="application/json" />
+            <option value="application/xml" />
+          </param>
+        </request>
+        <response status="200">
+          <doc>OK</doc>
+          <representation mediaType="application/json">
+            <doc>{
+  "data": {
+    "codeLists": [
+      {
+        "agencyID": "SDMX",
+        "annotations": [
+          {
+            "id": "origin",
+            "text": null,
+            "title": null,
+            "type": null,
+            "value": "INTEGRATION"
+          },
+          {
+            "id": "isFinal",
+            "text": null,
+            "title": null,
+            "type": null,
+            "value": null
+          },
+          {
+            "id": "lastUpdatedAt",
+            "text": null,
+            "title": null,
+            "type": null,
+            "value": "2023-02-21T07:31:30"
+          }
+        ],
+        "codes": [
+          {
+            "annotations": [],
+            "description": "To be used for data collected or disseminated every year.",
+            "descriptions": {
+              "en": "To be used for data collected or disseminated every year."
+            },
+            "id": "A",
+            "name": "Annual",
+            "names": {
+              "en": "Annual"
+            }
+          }
+        ],
+        "description": "This code list provides a set of values indicating the \\\"frequency\\\" of the data (e.g. weekly, monthly, quarterly). The concept \\u201Cfrequency\\u201D may refer to various stages in the production process, e.g. data collection or data dissemination. For example, a time series could be disseminated at annual frequency but the underlying data are compiled monthly. The code list is applicable for all different uses of \\\"frequency\\\". This code list was formally adopted on 4 December 2013. More information about and supporting material for this code list and SDMX code lists in general (e.g. list of generic codes for expressing general concepts like \\\"Total\\\", \\\"Unknown\\\", etc.; syntaxes for the creation of further codes; general guidelines for the creation of SDMX code lists) can be found at this address: https://sdmx.org/?page_id=4345.",
+        "descriptions": {
+          "en": "This code list provides a set of values indicating the \\\"frequency\\\" of the data (e.g. weekly, monthly, quarterly). The concept \\u201Cfrequency\\u201D may refer to various stages in the production process, e.g. data collection or data dissemination. For example, a time series could be disseminated at annual frequency but the underlying data are compiled monthly. The code list is applicable for all different uses of \\\"frequency\\\". This code list was formally adopted on 4 December 2013. More information about and supporting material for this code list and SDMX code lists in general (e.g. list of generic codes for expressing general concepts like \\\"Total\\\", \\\"Unknown\\\", etc.; syntaxes for the creation of further codes; general guidelines for the creation of SDMX code lists) can be found at this address: https://sdmx.org/?page_id=4345."
+        },
+        "id": "CL_FREQ",
+        "isPartial": true,
+        "links": [
+          {
+            "rel": "self",
+            "type": "codelist",
+            "urn": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.0)"
+          }
+        ],
+        "name": "Frequency",
+        "names": {
+          "en": "Frequency"
+        },
+        "version": "2.0"
+      }
+    ]
+  },
+  "meta": {
+    "contentLanguages": [
+      "en"
+    ],
+    "id": "IDREF9418",
+    "prepared": "2023-08-17T12:34:35",
+    "schema": "https://raw.githubusercontent.com/sdmx-twg/sdmx-json/sdmx3.0.0/metadata-message/tools/schemas/2.0.0/sdmx-json-metadata-schema.json",
+    "sender": {
+      "id": "unknown"
+    },
+    "test": false
+  }
+}</doc>
+          </representation>
+          <representation mediaType="application/xml">
+            <doc>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;message:Structure xmlns:message="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/message" xmlns:structure="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/structure" xmlns:common="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/common" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xml="http://www.w3.org/XML/1998/namespace" xsi:schemaLocation="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/message ../../schemas/SDMXMessage.xsd"&gt;
+    &lt;message:Header&gt;
+        &lt;message:ID&gt;IDREF6142&lt;/message:ID&gt;
+        &lt;message:Test&gt;false&lt;/message:Test&gt;
+        &lt;message:Prepared&gt;2023-08-17T14:39:32.567530217Z&lt;/message:Prepared&gt;
+        &lt;message:Sender id="unknown"/&gt;
+    &lt;/message:Header&gt;
+    &lt;message:Structures&gt;
+        &lt;structure:Codelists&gt;
+            &lt;structure:Codelist urn="urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.0)" agencyID="SDMX" id="CL_FREQ" version="2.0" isExternalReference="false" isPartial="true"&gt;
+                &lt;common:Annotations&gt;
+                    &lt;common:Annotation id="origin"&gt;
+                        &lt;common:AnnotationValue&gt;INTEGRATION&lt;/common:AnnotationValue&gt;
+                    &lt;/common:Annotation&gt;
+                    &lt;common:Annotation id="isFinal"/&gt;
+                    &lt;common:Annotation id="lastUpdatedAt"&gt;
+                        &lt;common:AnnotationValue&gt;2023-02-21T19:31:30.726036Z&lt;/common:AnnotationValue&gt;
+                    &lt;/common:Annotation&gt;
+                &lt;/common:Annotations&gt;
+                &lt;common:Link url="urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.0)" type="codelist" rel="self"/&gt;
+                &lt;common:Name xml:lang="en"&gt;Frequency&lt;/common:Name&gt;
+                &lt;common:Description xml:lang="en"&gt;This code list provides a set of values indicating the "frequency" of the data (e.g. weekly, monthly, quarterly). The concept “frequency” may refer to various stages in the production process, e.g. data collection or data dissemination. For example, a time series could be disseminated at annual frequency but the underlying data are compiled monthly. The code list is applicable for all different uses of "frequency". This code list was formally adopted on 4 December 2013. More information about and supporting material for this code list and SDMX code lists in general (e.g. list of generic codes for expressing general concepts like "Total", "Unknown", etc.; syntaxes for the creation of further codes; general guidelines for the creation of SDMX code lists) can be found at this address: https://sdmx.org/?page_id=4345.&lt;/common:Description&gt;
+                &lt;structure:Code id="A"&gt;
+                    &lt;common:Name xml:lang="en"&gt;Annual&lt;/common:Name&gt;
+                    &lt;common:Description xml:lang="en"&gt;To be used for data collected or disseminated every year.&lt;/common:Description&gt;
+                &lt;/structure:Code&gt;
+            &lt;/structure:Codelist&gt;
+        &lt;/structure:Codelists&gt;
+    &lt;/message:Structures&gt;
+&lt;/message:Structure&gt;</doc>
+          </representation>
+        </response>
+      </method>
+    </resource>
+    <resource path="/structure/{structureType}/{agencyID}/{resourceID}">
+      <doc title="Structure Query [Structure Type, Agency, Resource]">Structure queries when no version and no item are specified. The version is equivalent to "~" and item is equivalent to "*".
+</doc>
+      <param name="structureType" style="template" type="xs:string" default="codelist" required="true">
+        <doc>The type of structural metadata (e.g. codelist, dataflow, etc.)</doc>
+        <option value="datastructure" />
+        <option value="metadatastructure" />
+        <option value="dataflow" />
+        <option value="metadataflow" />
+        <option value="provisionagreement" />
+        <option value="structureset" />
+        <option value="process" />
+        <option value="categorisation" />
+        <option value="dataconstraint" />
+        <option value="metadataconstraint" />
+        <option value="conceptscheme" />
+        <option value="codelist" />
+        <option value="categoryscheme" />
+        <option value="hierarchy" />
+        <option value="hierarchyassociation" />
+        <option value="agencyscheme" />
+        <option value="dataproviderscheme" />
+        <option value="dataconsumerscheme" />
+        <option value="organisationunitscheme" />
+        <option value="transformationscheme" />
+        <option value="rulesetscheme" />
+        <option value="userdefinedoperatorscheme" />
+        <option value="customtypescheme" />
+        <option value="namepersonalisationscheme" />
+        <option value="vtlmappingscheme" />
+        <option value="valuelist" />
+        <option value="structuremap" />
+        <option value="representationmap" />
+        <option value="conceptschememap" />
+        <option value="categoryschememap" />
+        <option value="organisationschememap" />
+        <option value="reportingtaxonomymap" />
+        <option value="*" />
+      </param>
+      <param name="agencyID" style="template" type="xs:array" default="IMF" required="true">
+        <doc>The maintainer(s) of the artefacts.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available maintainers.
+</doc>
+      </param>
+      <param name="resourceID" style="template" type="xs:array" default="CL_COUNTRY" required="true">
+        <doc>The artefact ID(s).
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available artefacts.
+</doc>
+      </param>
+      <method name="GET">
+        <request>
+          <param name="detail" style="query" type="xs:string" default="full">
+            <doc>This attribute specifies the desired amount of information to be returned. For example, it is possible to instruct the web service to return only basic information about the maintainable artefact (i.e.: id, agency id, version and name). Most notably, items of item schemes will not be returned (for example, it will not return the codes in a code list query).
+
+Possible values are:
+
+`full` - all available information for all returned artefacts should be returned. Returned extended codelists are to be resolved, i.e. include all inherited codes, and must not include the CodelistExtension property. As the inherited codelists must be resolved, they should not be returned a second time as separated codelists.
+
+`allstubs` - all returned artefacts should be returned as stubs, i.e. only containing identification information and the artefacts' name.
+
+`referencestubs` - same as full with the exception that referenced artefacts should be returned only as stubs, i.e. only containing identification information and the artefacts' name.
+
+`allcompletestubs` all returned artefacts should be returned as complete stubs, i.e. only containing identification information, the artefacts' name, description and annotations.
+
+`referencecompletestubs` - same as full with the exception that referenced artefacts should be returned as complete stubs, i.e. only containing identification information, the artefacts' name, description and annotations.
+
+`referencepartial` - same as full with the exception that referenced item schemes should only include items used by the artefact to be returned.
+
+`raw` - same as full with the exception that the returned extended codelists are not resolved and must include the CodelistExtension property, and if referenced codelists or descendants are to be returned then they include also all inherited codelists.</doc>
+            <option value="full" />
+            <option value="allstubs" />
+            <option value="referencestubs" />
+            <option value="allcompletestubs" />
+            <option value="referencecompletestubs" />
+            <option value="referencepartial" />
+            <option value="raw" />
+          </param>
+          <param name="references" style="query" type="xs:array" default="none">
+            <doc>This attribute instructs the web service to return (or not) the artefacts referenced by the artefact to be returned (for example, the code lists and concepts used by the data structure definition matching the query), as well as the artefacts that use the matching artefact (for example, the dataflows that use the data structure definition matching the query).
+
+Possible values are:
+
+`none` - no references will be returned
+
+`parents` - the artefacts that use the artefact matching the query
+
+`parentsandsiblings` - the artefacts that use the artefact matching the query, as well as the artefacts referenced by these artefacts
+
+`ancestors` - the artefacts that use the artefact matching the query, up to any level
+
+`children` - artefacts referenced by the artefact to be returned
+
+`descendants` - references of references, up to any level, will also be returned
+
+`all` - the combination of parentsandsiblings and descendants.
+
+In addition, a concrete type of resource may also be used (for example, `references`=`codelist`).</doc>
+          </param>
+          <param name="asOf" style="query" type="xs:string">
+            <doc>Format - date-time (as date-time in RFC3339). Retrieve the resource as it was at the supplied point in time (aka time travel).
+</doc>
+          </param>
+          <param name="Accept" style="header" type="xs:string">
+            <doc>Specifies the output format. 
+
+`application/json` (the default) indicates that output format is a json.
+</doc>
+            <option value="application/json" />
+            <option value="application/xml" />
+          </param>
+        </request>
+        <response status="200">
+          <doc>OK</doc>
+          <representation mediaType="application/json">
+            <doc>{
+  "data": {
+    "codeLists": [
+      {
+        "agencyID": "SDMX",
+        "annotations": [
+          {
+            "id": "origin",
+            "text": null,
+            "title": null,
+            "type": null,
+            "value": "INTEGRATION"
+          },
+          {
+            "id": "isFinal",
+            "text": null,
+            "title": null,
+            "type": null,
+            "value": null
+          },
+          {
+            "id": "lastUpdatedAt",
+            "text": null,
+            "title": null,
+            "type": null,
+            "value": "2023-02-21T07:31:30"
+          }
+        ],
+        "codes": [
+          {
+            "annotations": [],
+            "description": "To be used for data collected or disseminated every year.",
+            "descriptions": {
+              "en": "To be used for data collected or disseminated every year."
+            },
+            "id": "A",
+            "name": "Annual",
+            "names": {
+              "en": "Annual"
+            }
+          }
+        ],
+        "description": "This code list provides a set of values indicating the \\\"frequency\\\" of the data (e.g. weekly, monthly, quarterly). The concept \\u201Cfrequency\\u201D may refer to various stages in the production process, e.g. data collection or data dissemination. For example, a time series could be disseminated at annual frequency but the underlying data are compiled monthly. The code list is applicable for all different uses of \\\"frequency\\\". This code list was formally adopted on 4 December 2013. More information about and supporting material for this code list and SDMX code lists in general (e.g. list of generic codes for expressing general concepts like \\\"Total\\\", \\\"Unknown\\\", etc.; syntaxes for the creation of further codes; general guidelines for the creation of SDMX code lists) can be found at this address: https://sdmx.org/?page_id=4345.",
+        "descriptions": {
+          "en": "This code list provides a set of values indicating the \\\"frequency\\\" of the data (e.g. weekly, monthly, quarterly). The concept \\u201Cfrequency\\u201D may refer to various stages in the production process, e.g. data collection or data dissemination. For example, a time series could be disseminated at annual frequency but the underlying data are compiled monthly. The code list is applicable for all different uses of \\\"frequency\\\". This code list was formally adopted on 4 December 2013. More information about and supporting material for this code list and SDMX code lists in general (e.g. list of generic codes for expressing general concepts like \\\"Total\\\", \\\"Unknown\\\", etc.; syntaxes for the creation of further codes; general guidelines for the creation of SDMX code lists) can be found at this address: https://sdmx.org/?page_id=4345."
+        },
+        "id": "CL_FREQ",
+        "isPartial": true,
+        "links": [
+          {
+            "rel": "self",
+            "type": "codelist",
+            "urn": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.0)"
+          }
+        ],
+        "name": "Frequency",
+        "names": {
+          "en": "Frequency"
+        },
+        "version": "2.0"
+      }
+    ]
+  },
+  "meta": {
+    "contentLanguages": [
+      "en"
+    ],
+    "id": "IDREF9418",
+    "prepared": "2023-08-17T12:34:35",
+    "schema": "https://raw.githubusercontent.com/sdmx-twg/sdmx-json/sdmx3.0.0/metadata-message/tools/schemas/2.0.0/sdmx-json-metadata-schema.json",
+    "sender": {
+      "id": "unknown"
+    },
+    "test": false
+  }
+}</doc>
+          </representation>
+          <representation mediaType="application/xml">
+            <doc>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;message:Structure xmlns:message="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/message" xmlns:structure="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/structure" xmlns:common="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/common" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xml="http://www.w3.org/XML/1998/namespace" xsi:schemaLocation="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/message ../../schemas/SDMXMessage.xsd"&gt;
+    &lt;message:Header&gt;
+        &lt;message:ID&gt;IDREF6142&lt;/message:ID&gt;
+        &lt;message:Test&gt;false&lt;/message:Test&gt;
+        &lt;message:Prepared&gt;2023-08-17T14:39:32.567530217Z&lt;/message:Prepared&gt;
+        &lt;message:Sender id="unknown"/&gt;
+    &lt;/message:Header&gt;
+    &lt;message:Structures&gt;
+        &lt;structure:Codelists&gt;
+            &lt;structure:Codelist urn="urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.0)" agencyID="SDMX" id="CL_FREQ" version="2.0" isExternalReference="false" isPartial="true"&gt;
+                &lt;common:Annotations&gt;
+                    &lt;common:Annotation id="origin"&gt;
+                        &lt;common:AnnotationValue&gt;INTEGRATION&lt;/common:AnnotationValue&gt;
+                    &lt;/common:Annotation&gt;
+                    &lt;common:Annotation id="isFinal"/&gt;
+                    &lt;common:Annotation id="lastUpdatedAt"&gt;
+                        &lt;common:AnnotationValue&gt;2023-02-21T19:31:30.726036Z&lt;/common:AnnotationValue&gt;
+                    &lt;/common:Annotation&gt;
+                &lt;/common:Annotations&gt;
+                &lt;common:Link url="urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.0)" type="codelist" rel="self"/&gt;
+                &lt;common:Name xml:lang="en"&gt;Frequency&lt;/common:Name&gt;
+                &lt;common:Description xml:lang="en"&gt;This code list provides a set of values indicating the "frequency" of the data (e.g. weekly, monthly, quarterly). The concept “frequency” may refer to various stages in the production process, e.g. data collection or data dissemination. For example, a time series could be disseminated at annual frequency but the underlying data are compiled monthly. The code list is applicable for all different uses of "frequency". This code list was formally adopted on 4 December 2013. More information about and supporting material for this code list and SDMX code lists in general (e.g. list of generic codes for expressing general concepts like "Total", "Unknown", etc.; syntaxes for the creation of further codes; general guidelines for the creation of SDMX code lists) can be found at this address: https://sdmx.org/?page_id=4345.&lt;/common:Description&gt;
+                &lt;structure:Code id="A"&gt;
+                    &lt;common:Name xml:lang="en"&gt;Annual&lt;/common:Name&gt;
+                    &lt;common:Description xml:lang="en"&gt;To be used for data collected or disseminated every year.&lt;/common:Description&gt;
+                &lt;/structure:Code&gt;
+            &lt;/structure:Codelist&gt;
+        &lt;/structure:Codelists&gt;
+    &lt;/message:Structures&gt;
+&lt;/message:Structure&gt;</doc>
+          </representation>
+        </response>
+      </method>
+    </resource>
+    <resource path="/structure/{structureType}/{agencyID}">
+      <doc title="Structure Query [Structure Type, Agency]">Structure queries when no resource, no version and no item are specified. The resource is equivalent to "*", the version is equivalent to "~" and item is equivalent to "*".</doc>
+      <param name="structureType" style="template" type="xs:string" default="codelist" required="true">
+        <doc>The type of structural metadata (e.g. codelist, dataflow, etc.)</doc>
+        <option value="datastructure" />
+        <option value="metadatastructure" />
+        <option value="dataflow" />
+        <option value="metadataflow" />
+        <option value="provisionagreement" />
+        <option value="structureset" />
+        <option value="process" />
+        <option value="categorisation" />
+        <option value="dataconstraint" />
+        <option value="metadataconstraint" />
+        <option value="conceptscheme" />
+        <option value="codelist" />
+        <option value="categoryscheme" />
+        <option value="hierarchy" />
+        <option value="hierarchyassociation" />
+        <option value="agencyscheme" />
+        <option value="dataproviderscheme" />
+        <option value="dataconsumerscheme" />
+        <option value="organisationunitscheme" />
+        <option value="transformationscheme" />
+        <option value="rulesetscheme" />
+        <option value="userdefinedoperatorscheme" />
+        <option value="customtypescheme" />
+        <option value="namepersonalisationscheme" />
+        <option value="vtlmappingscheme" />
+        <option value="valuelist" />
+        <option value="structuremap" />
+        <option value="representationmap" />
+        <option value="conceptschememap" />
+        <option value="categoryschememap" />
+        <option value="organisationschememap" />
+        <option value="reportingtaxonomymap" />
+        <option value="*" />
+      </param>
+      <param name="agencyID" style="template" type="xs:array" default="IMF" required="true">
+        <doc>The maintainer(s) of the artefacts.
+
+Multiple values can be selected by using `,` as a separator. `*` can be used as shortcut to select all available maintainers.
+</doc>
+      </param>
+      <method name="GET">
+        <request>
+          <param name="detail" style="query" type="xs:string" default="full">
+            <doc>This attribute specifies the desired amount of information to be returned. For example, it is possible to instruct the web service to return only basic information about the maintainable artefact (i.e.: id, agency id, version and name). Most notably, items of item schemes will not be returned (for example, it will not return the codes in a code list query).
+
+Possible values are:
+
+`full` - all available information for all returned artefacts should be returned. Returned extended codelists are to be resolved, i.e. include all inherited codes, and must not include the CodelistExtension property. As the inherited codelists must be resolved, they should not be returned a second time as separated codelists.
+
+`allstubs` - all returned artefacts should be returned as stubs, i.e. only containing identification information and the artefacts' name.
+
+`referencestubs` - same as full with the exception that referenced artefacts should be returned only as stubs, i.e. only containing identification information and the artefacts' name.
+
+`allcompletestubs` all returned artefacts should be returned as complete stubs, i.e. only containing identification information, the artefacts' name, description and annotations.
+
+`referencecompletestubs` - same as full with the exception that referenced artefacts should be returned as complete stubs, i.e. only containing identification information, the artefacts' name, description and annotations.
+
+`referencepartial` - same as full with the exception that referenced item schemes should only include items used by the artefact to be returned.
+
+`raw` - same as full with the exception that the returned extended codelists are not resolved and must include the CodelistExtension property, and if referenced codelists or descendants are to be returned then they include also all inherited codelists.</doc>
+            <option value="full" />
+            <option value="allstubs" />
+            <option value="referencestubs" />
+            <option value="allcompletestubs" />
+            <option value="referencecompletestubs" />
+            <option value="referencepartial" />
+            <option value="raw" />
+          </param>
+          <param name="references" style="query" type="xs:array" default="none">
+            <doc>This attribute instructs the web service to return (or not) the artefacts referenced by the artefact to be returned (for example, the code lists and concepts used by the data structure definition matching the query), as well as the artefacts that use the matching artefact (for example, the dataflows that use the data structure definition matching the query).
+
+Possible values are:
+
+`none` - no references will be returned
+
+`parents` - the artefacts that use the artefact matching the query
+
+`parentsandsiblings` - the artefacts that use the artefact matching the query, as well as the artefacts referenced by these artefacts
+
+`ancestors` - the artefacts that use the artefact matching the query, up to any level
+
+`children` - artefacts referenced by the artefact to be returned
+
+`descendants` - references of references, up to any level, will also be returned
+
+`all` - the combination of parentsandsiblings and descendants.
+
+In addition, a concrete type of resource may also be used (for example, `references`=`codelist`).</doc>
+          </param>
+          <param name="asOf" style="query" type="xs:string">
+            <doc>Format - date-time (as date-time in RFC3339). Retrieve the resource as it was at the supplied point in time (aka time travel).
+</doc>
+          </param>
+          <param name="Accept" style="header" type="xs:string">
+            <doc>Specifies the output format. 
+
+`application/json` (the default) indicates that output format is a json.
+</doc>
+            <option value="application/json" />
+            <option value="application/xml" />
+          </param>
+        </request>
+        <response status="200">
+          <doc>OK</doc>
+          <representation mediaType="application/json">
+            <doc>{
+  "data": {
+    "codeLists": [
+      {
+        "agencyID": "SDMX",
+        "annotations": [
+          {
+            "id": "origin",
+            "text": null,
+            "title": null,
+            "type": null,
+            "value": "INTEGRATION"
+          },
+          {
+            "id": "isFinal",
+            "text": null,
+            "title": null,
+            "type": null,
+            "value": null
+          },
+          {
+            "id": "lastUpdatedAt",
+            "text": null,
+            "title": null,
+            "type": null,
+            "value": "2023-02-21T07:31:30"
+          }
+        ],
+        "codes": [
+          {
+            "annotations": [],
+            "description": "To be used for data collected or disseminated every year.",
+            "descriptions": {
+              "en": "To be used for data collected or disseminated every year."
+            },
+            "id": "A",
+            "name": "Annual",
+            "names": {
+              "en": "Annual"
+            }
+          }
+        ],
+        "description": "This code list provides a set of values indicating the \\\"frequency\\\" of the data (e.g. weekly, monthly, quarterly). The concept \\u201Cfrequency\\u201D may refer to various stages in the production process, e.g. data collection or data dissemination. For example, a time series could be disseminated at annual frequency but the underlying data are compiled monthly. The code list is applicable for all different uses of \\\"frequency\\\". This code list was formally adopted on 4 December 2013. More information about and supporting material for this code list and SDMX code lists in general (e.g. list of generic codes for expressing general concepts like \\\"Total\\\", \\\"Unknown\\\", etc.; syntaxes for the creation of further codes; general guidelines for the creation of SDMX code lists) can be found at this address: https://sdmx.org/?page_id=4345.",
+        "descriptions": {
+          "en": "This code list provides a set of values indicating the \\\"frequency\\\" of the data (e.g. weekly, monthly, quarterly). The concept \\u201Cfrequency\\u201D may refer to various stages in the production process, e.g. data collection or data dissemination. For example, a time series could be disseminated at annual frequency but the underlying data are compiled monthly. The code list is applicable for all different uses of \\\"frequency\\\". This code list was formally adopted on 4 December 2013. More information about and supporting material for this code list and SDMX code lists in general (e.g. list of generic codes for expressing general concepts like \\\"Total\\\", \\\"Unknown\\\", etc.; syntaxes for the creation of further codes; general guidelines for the creation of SDMX code lists) can be found at this address: https://sdmx.org/?page_id=4345."
+        },
+        "id": "CL_FREQ",
+        "isPartial": true,
+        "links": [
+          {
+            "rel": "self",
+            "type": "codelist",
+            "urn": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.0)"
+          }
+        ],
+        "name": "Frequency",
+        "names": {
+          "en": "Frequency"
+        },
+        "version": "2.0"
+      }
+    ]
+  },
+  "meta": {
+    "contentLanguages": [
+      "en"
+    ],
+    "id": "IDREF9418",
+    "prepared": "2023-08-17T12:34:35",
+    "schema": "https://raw.githubusercontent.com/sdmx-twg/sdmx-json/sdmx3.0.0/metadata-message/tools/schemas/2.0.0/sdmx-json-metadata-schema.json",
+    "sender": {
+      "id": "unknown"
+    },
+    "test": false
+  }
+}</doc>
+          </representation>
+          <representation mediaType="application/xml">
+            <doc>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;message:Structure xmlns:message="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/message" xmlns:structure="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/structure" xmlns:common="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/common" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xml="http://www.w3.org/XML/1998/namespace" xsi:schemaLocation="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/message ../../schemas/SDMXMessage.xsd"&gt;
+    &lt;message:Header&gt;
+        &lt;message:ID&gt;IDREF6142&lt;/message:ID&gt;
+        &lt;message:Test&gt;false&lt;/message:Test&gt;
+        &lt;message:Prepared&gt;2023-08-17T14:39:32.567530217Z&lt;/message:Prepared&gt;
+        &lt;message:Sender id="unknown"/&gt;
+    &lt;/message:Header&gt;
+    &lt;message:Structures&gt;
+        &lt;structure:Codelists&gt;
+            &lt;structure:Codelist urn="urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.0)" agencyID="SDMX" id="CL_FREQ" version="2.0" isExternalReference="false" isPartial="true"&gt;
+                &lt;common:Annotations&gt;
+                    &lt;common:Annotation id="origin"&gt;
+                        &lt;common:AnnotationValue&gt;INTEGRATION&lt;/common:AnnotationValue&gt;
+                    &lt;/common:Annotation&gt;
+                    &lt;common:Annotation id="isFinal"/&gt;
+                    &lt;common:Annotation id="lastUpdatedAt"&gt;
+                        &lt;common:AnnotationValue&gt;2023-02-21T19:31:30.726036Z&lt;/common:AnnotationValue&gt;
+                    &lt;/common:Annotation&gt;
+                &lt;/common:Annotations&gt;
+                &lt;common:Link url="urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.0)" type="codelist" rel="self"/&gt;
+                &lt;common:Name xml:lang="en"&gt;Frequency&lt;/common:Name&gt;
+                &lt;common:Description xml:lang="en"&gt;This code list provides a set of values indicating the "frequency" of the data (e.g. weekly, monthly, quarterly). The concept “frequency” may refer to various stages in the production process, e.g. data collection or data dissemination. For example, a time series could be disseminated at annual frequency but the underlying data are compiled monthly. The code list is applicable for all different uses of "frequency". This code list was formally adopted on 4 December 2013. More information about and supporting material for this code list and SDMX code lists in general (e.g. list of generic codes for expressing general concepts like "Total", "Unknown", etc.; syntaxes for the creation of further codes; general guidelines for the creation of SDMX code lists) can be found at this address: https://sdmx.org/?page_id=4345.&lt;/common:Description&gt;
+                &lt;structure:Code id="A"&gt;
+                    &lt;common:Name xml:lang="en"&gt;Annual&lt;/common:Name&gt;
+                    &lt;common:Description xml:lang="en"&gt;To be used for data collected or disseminated every year.&lt;/common:Description&gt;
+                &lt;/structure:Code&gt;
+            &lt;/structure:Codelist&gt;
+        &lt;/structure:Codelists&gt;
+    &lt;/message:Structures&gt;
+&lt;/message:Structure&gt;</doc>
+          </representation>
+        </response>
+      </method>
+    </resource>
+    <resource path="/structure/{structureType}">
+      <doc title="Structure Query [Structure Type]">Structure queries when no agency, no resource, no version and no item are specified. The agency is equivalent to "*", resource is equivalent to "*", the version is equivalent to "~" and item is equivalent to "*".
+</doc>
+      <param name="structureType" style="template" type="xs:string" default="codelist" required="true">
+        <doc>The type of structural metadata (e.g. codelist, dataflow, etc.)</doc>
+        <option value="datastructure" />
+        <option value="metadatastructure" />
+        <option value="dataflow" />
+        <option value="metadataflow" />
+        <option value="provisionagreement" />
+        <option value="structureset" />
+        <option value="process" />
+        <option value="categorisation" />
+        <option value="dataconstraint" />
+        <option value="metadataconstraint" />
+        <option value="conceptscheme" />
+        <option value="codelist" />
+        <option value="categoryscheme" />
+        <option value="hierarchy" />
+        <option value="hierarchyassociation" />
+        <option value="agencyscheme" />
+        <option value="dataproviderscheme" />
+        <option value="dataconsumerscheme" />
+        <option value="organisationunitscheme" />
+        <option value="transformationscheme" />
+        <option value="rulesetscheme" />
+        <option value="userdefinedoperatorscheme" />
+        <option value="customtypescheme" />
+        <option value="namepersonalisationscheme" />
+        <option value="vtlmappingscheme" />
+        <option value="valuelist" />
+        <option value="structuremap" />
+        <option value="representationmap" />
+        <option value="conceptschememap" />
+        <option value="categoryschememap" />
+        <option value="organisationschememap" />
+        <option value="reportingtaxonomymap" />
+        <option value="*" />
+      </param>
+      <method name="GET">
+        <request>
+          <param name="detail" style="query" type="xs:string" default="full">
+            <doc>This attribute specifies the desired amount of information to be returned. For example, it is possible to instruct the web service to return only basic information about the maintainable artefact (i.e.: id, agency id, version and name). Most notably, items of item schemes will not be returned (for example, it will not return the codes in a code list query).
+
+Possible values are:
+
+`full` - all available information for all returned artefacts should be returned. Returned extended codelists are to be resolved, i.e. include all inherited codes, and must not include the CodelistExtension property. As the inherited codelists must be resolved, they should not be returned a second time as separated codelists.
+
+`allstubs` - all returned artefacts should be returned as stubs, i.e. only containing identification information and the artefacts' name.
+
+`referencestubs` - same as full with the exception that referenced artefacts should be returned only as stubs, i.e. only containing identification information and the artefacts' name.
+
+`allcompletestubs` all returned artefacts should be returned as complete stubs, i.e. only containing identification information, the artefacts' name, description and annotations.
+
+`referencecompletestubs` - same as full with the exception that referenced artefacts should be returned as complete stubs, i.e. only containing identification information, the artefacts' name, description and annotations.
+
+`referencepartial` - same as full with the exception that referenced item schemes should only include items used by the artefact to be returned.
+
+`raw` - same as full with the exception that the returned extended codelists are not resolved and must include the CodelistExtension property, and if referenced codelists or descendants are to be returned then they include also all inherited codelists.</doc>
+            <option value="full" />
+            <option value="allstubs" />
+            <option value="referencestubs" />
+            <option value="allcompletestubs" />
+            <option value="referencecompletestubs" />
+            <option value="referencepartial" />
+            <option value="raw" />
+          </param>
+          <param name="references" style="query" type="xs:array" default="none">
+            <doc>This attribute instructs the web service to return (or not) the artefacts referenced by the artefact to be returned (for example, the code lists and concepts used by the data structure definition matching the query), as well as the artefacts that use the matching artefact (for example, the dataflows that use the data structure definition matching the query).
+
+Possible values are:
+
+`none` - no references will be returned
+
+`parents` - the artefacts that use the artefact matching the query
+
+`parentsandsiblings` - the artefacts that use the artefact matching the query, as well as the artefacts referenced by these artefacts
+
+`ancestors` - the artefacts that use the artefact matching the query, up to any level
+
+`children` - artefacts referenced by the artefact to be returned
+
+`descendants` - references of references, up to any level, will also be returned
+
+`all` - the combination of parentsandsiblings and descendants.
+
+In addition, a concrete type of resource may also be used (for example, `references`=`codelist`).</doc>
+          </param>
+          <param name="asOf" style="query" type="xs:string">
+            <doc>Format - date-time (as date-time in RFC3339). Retrieve the resource as it was at the supplied point in time (aka time travel).
+</doc>
+          </param>
+          <param name="Accept" style="header" type="xs:string">
+            <doc>Specifies the output format. 
+
+`application/json` (the default) indicates that output format is a json.
+</doc>
+            <option value="application/json" />
+            <option value="application/xml" />
+          </param>
+        </request>
+        <response status="200">
+          <doc>OK</doc>
+          <representation mediaType="application/json">
+            <doc>{
+  "data": {
+    "codeLists": [
+      {
+        "agencyID": "SDMX",
+        "annotations": [
+          {
+            "id": "origin",
+            "text": null,
+            "title": null,
+            "type": null,
+            "value": "INTEGRATION"
+          },
+          {
+            "id": "isFinal",
+            "text": null,
+            "title": null,
+            "type": null,
+            "value": null
+          },
+          {
+            "id": "lastUpdatedAt",
+            "text": null,
+            "title": null,
+            "type": null,
+            "value": "2023-02-21T07:31:30"
+          }
+        ],
+        "codes": [
+          {
+            "annotations": [],
+            "description": "To be used for data collected or disseminated every year.",
+            "descriptions": {
+              "en": "To be used for data collected or disseminated every year."
+            },
+            "id": "A",
+            "name": "Annual",
+            "names": {
+              "en": "Annual"
+            }
+          }
+        ],
+        "description": "This code list provides a set of values indicating the \\\"frequency\\\" of the data (e.g. weekly, monthly, quarterly). The concept \\u201Cfrequency\\u201D may refer to various stages in the production process, e.g. data collection or data dissemination. For example, a time series could be disseminated at annual frequency but the underlying data are compiled monthly. The code list is applicable for all different uses of \\\"frequency\\\". This code list was formally adopted on 4 December 2013. More information about and supporting material for this code list and SDMX code lists in general (e.g. list of generic codes for expressing general concepts like \\\"Total\\\", \\\"Unknown\\\", etc.; syntaxes for the creation of further codes; general guidelines for the creation of SDMX code lists) can be found at this address: https://sdmx.org/?page_id=4345.",
+        "descriptions": {
+          "en": "This code list provides a set of values indicating the \\\"frequency\\\" of the data (e.g. weekly, monthly, quarterly). The concept \\u201Cfrequency\\u201D may refer to various stages in the production process, e.g. data collection or data dissemination. For example, a time series could be disseminated at annual frequency but the underlying data are compiled monthly. The code list is applicable for all different uses of \\\"frequency\\\". This code list was formally adopted on 4 December 2013. More information about and supporting material for this code list and SDMX code lists in general (e.g. list of generic codes for expressing general concepts like \\\"Total\\\", \\\"Unknown\\\", etc.; syntaxes for the creation of further codes; general guidelines for the creation of SDMX code lists) can be found at this address: https://sdmx.org/?page_id=4345."
+        },
+        "id": "CL_FREQ",
+        "isPartial": true,
+        "links": [
+          {
+            "rel": "self",
+            "type": "codelist",
+            "urn": "urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.0)"
+          }
+        ],
+        "name": "Frequency",
+        "names": {
+          "en": "Frequency"
+        },
+        "version": "2.0"
+      }
+    ]
+  },
+  "meta": {
+    "contentLanguages": [
+      "en"
+    ],
+    "id": "IDREF9418",
+    "prepared": "2023-08-17T12:34:35",
+    "schema": "https://raw.githubusercontent.com/sdmx-twg/sdmx-json/sdmx3.0.0/metadata-message/tools/schemas/2.0.0/sdmx-json-metadata-schema.json",
+    "sender": {
+      "id": "unknown"
+    },
+    "test": false
+  }
+}</doc>
+          </representation>
+          <representation mediaType="application/xml">
+            <doc>&lt;?xml version="1.0" encoding="UTF-8"?&gt;
+&lt;message:Structure xmlns:message="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/message" xmlns:structure="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/structure" xmlns:common="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/common" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xml="http://www.w3.org/XML/1998/namespace" xsi:schemaLocation="http://www.sdmx.org/resources/sdmxml/schemas/v3_0/message ../../schemas/SDMXMessage.xsd"&gt;
+    &lt;message:Header&gt;
+        &lt;message:ID&gt;IDREF6142&lt;/message:ID&gt;
+        &lt;message:Test&gt;false&lt;/message:Test&gt;
+        &lt;message:Prepared&gt;2023-08-17T14:39:32.567530217Z&lt;/message:Prepared&gt;
+        &lt;message:Sender id="unknown"/&gt;
+    &lt;/message:Header&gt;
+    &lt;message:Structures&gt;
+        &lt;structure:Codelists&gt;
+            &lt;structure:Codelist urn="urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.0)" agencyID="SDMX" id="CL_FREQ" version="2.0" isExternalReference="false" isPartial="true"&gt;
+                &lt;common:Annotations&gt;
+                    &lt;common:Annotation id="origin"&gt;
+                        &lt;common:AnnotationValue&gt;INTEGRATION&lt;/common:AnnotationValue&gt;
+                    &lt;/common:Annotation&gt;
+                    &lt;common:Annotation id="isFinal"/&gt;
+                    &lt;common:Annotation id="lastUpdatedAt"&gt;
+                        &lt;common:AnnotationValue&gt;2023-02-21T19:31:30.726036Z&lt;/common:AnnotationValue&gt;
+                    &lt;/common:Annotation&gt;
+                &lt;/common:Annotations&gt;
+                &lt;common:Link url="urn:sdmx:org.sdmx.infomodel.codelist.Codelist=SDMX:CL_FREQ(2.0)" type="codelist" rel="self"/&gt;
+                &lt;common:Name xml:lang="en"&gt;Frequency&lt;/common:Name&gt;
+                &lt;common:Description xml:lang="en"&gt;This code list provides a set of values indicating the "frequency" of the data (e.g. weekly, monthly, quarterly). The concept “frequency” may refer to various stages in the production process, e.g. data collection or data dissemination. For example, a time series could be disseminated at annual frequency but the underlying data are compiled monthly. The code list is applicable for all different uses of "frequency". This code list was formally adopted on 4 December 2013. More information about and supporting material for this code list and SDMX code lists in general (e.g. list of generic codes for expressing general concepts like "Total", "Unknown", etc.; syntaxes for the creation of further codes; general guidelines for the creation of SDMX code lists) can be found at this address: https://sdmx.org/?page_id=4345.&lt;/common:Description&gt;
+                &lt;structure:Code id="A"&gt;
+                    &lt;common:Name xml:lang="en"&gt;Annual&lt;/common:Name&gt;
+                    &lt;common:Description xml:lang="en"&gt;To be used for data collected or disseminated every year.&lt;/common:Description&gt;
+                &lt;/structure:Code&gt;
+            &lt;/structure:Codelist&gt;
+        &lt;/structure:Codelists&gt;
+    &lt;/message:Structures&gt;
+&lt;/message:Structure&gt;</doc>
+          </representation>
+        </response>
+      </method>
+    </resource>
+  </resources>
+</application>

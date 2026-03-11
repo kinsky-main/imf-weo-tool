@@ -1,0 +1,22 @@
+# Optional label aliases and preferred display labels.
+# Add your own old selector wording here if you want extra compatibility.
+
+[units]
+"u.s. dollars" = "USD"
+"us dollars" = "USD"
+"u.s. dollar" = "USD"
+"purchasing power parity; 2021 international dollar" = "PPPPC"
+"purchasing power parity; international dollars" = "PPPPC"
+
+[scales]
+"billions" = "9"
+"millions" = "6"
+"units" = "0"
+
+[unit_display]
+USD = "U.S. dollars"
+
+[scale_display]
+"9" = "Billions"
+"6" = "Millions"
+"0" = "Units"

@@ -1,0 +1,15 @@
+# Default settings for both WEO scripts.
+# CLI flags override these values. Set `interactive = true` to prompt for
+# missing selectors in the terminal.
+
+alias_file = "config/weo_aliases.toml"
+frequency = "A"
+interactive = false
+start_year = 2020
+end_year = 2030
+output_path = ""
+
+countries = []
+subject_descriptors = []
+units = []
+scales = []
