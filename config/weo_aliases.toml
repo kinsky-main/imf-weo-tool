@@ -5,6 +5,13 @@
 "u.s. dollars" = "USD"
 "us dollars" = "USD"
 "u.s. dollar" = "USD"
+"national currency" = "XDC"
+"percent" = "PT"
+"percent change" = "PT"
+"percent of gdp" = "PT"
+"percent of potential gdp" = "PT"
+"percent of total labor force" = "PT"
+"persons" = "PE"
 "purchasing power parity; 2021 international dollar" = "PPPPC"
 "purchasing power parity; international dollars" = "PPPPC"
 
@@ -15,6 +22,9 @@
 
 [unit_display]
 USD = "U.S. dollars"
+XDC = "National currency"
+PT = "Percent"
+PE = "Persons"
 
 [scale_display]
 "9" = "Billions"

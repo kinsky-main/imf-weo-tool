@@ -9,12 +9,7 @@ import pandas as pd
 from .configuration import RuntimeSettings
 from .imf import Catalog, ImfWeoClient
 from .legacy import AliasConfig, LegacyCatalog, load_alias_config, load_legacy_catalog, normalize_label
-
-
-try:
-    import questionary
-except ImportError:  # pragma: no cover
-    questionary = None
+from .tui import prompt_for_choices, run_with_status
 
 
 @dataclass(slots=True)
@@ -63,14 +58,14 @@ def load_weo_dataframe(
 
 def run_dataframe(settings: RuntimeSettings, client: ImfWeoClient | None = None) -> pd.DataFrame:
     active_client = client or ImfWeoClient()
-    catalog = active_client.fetch_catalog()
+    catalog = run_with_status("Loading IMF WEO catalog...", active_client.fetch_catalog)
     aliases = load_alias_config(settings.alias_file)
     legacy = load_legacy_catalog(settings.compatibility_workbook)
     selections = _resolve_selections(settings, catalog, legacy, aliases, active_client)
 
-    # A single WEO series splice is COUNTRY.INDICATOR.FREQUENCY, for example
-    # GBR.NGDPD.A for UK annual current-price GDP. UNIT and SCALE are filters.
-    dataframe = active_client.fetch_dataframe(
+    dataframe = run_with_status(
+        "Fetching WEO data...",
+        active_client.fetch_dataframe,
         country_codes=selections.country_codes,
         indicator_codes=selections.indicator_codes,
         unit_codes=selections.unit_codes,
@@ -149,34 +144,47 @@ def _resolve_selections(
     aliases: AliasConfig,
     client: ImfWeoClient,
 ) -> ResolvedSelections:
-    countries = list(settings.countries)
-    subjects = list(settings.subject_descriptors)
-
-    if settings.interactive:
-        countries = countries or _prompt_for_codes(
+    selected_countries = list(settings.countries)
+    if settings.interactive and not selected_countries:
+        selected_countries = _prompt_for_codes(
             "Select countries",
             _build_choice_map(catalog.countries, legacy.preferred_country_labels),
         )
-        subjects = subjects or _prompt_for_codes(
-            "Select subject descriptors",
-            _build_choice_map(catalog.indicators, legacy.preferred_subject_labels),
-        )
-
-    if not countries:
+    if not selected_countries:
         raise ValueError("At least one country selector is required.")
-    if not subjects:
-        raise ValueError("At least one subject descriptor selector is required.")
 
     country_codes = _resolve_codes(
-        requested=countries,
+        requested=selected_countries,
         current_labels=catalog.countries,
         preferred_labels=legacy.preferred_country_labels,
         workbook_aliases=legacy.country_aliases,
         manual_aliases=aliases.countries,
         entity_name="country",
     )
+
+    available_indicator_codes = run_with_status(
+        "Checking available indicators...",
+        client.fetch_available_indicator_codes,
+        country_codes=country_codes,
+        frequency=settings.frequency,
+    )
+    if not available_indicator_codes:
+        raise ValueError("No indicators are available for the selected countries and frequency.")
+
+    selected_subjects = list(settings.subject_descriptors)
+    if settings.interactive and not selected_subjects:
+        selected_subjects = _prompt_for_codes(
+            "Select subject descriptors",
+            _build_choice_map(
+                {code: catalog.indicators[code] for code in available_indicator_codes},
+                {code: legacy.preferred_subject_labels.get(code, catalog.indicators[code]) for code in available_indicator_codes},
+            ),
+        )
+    if not selected_subjects:
+        raise ValueError("At least one subject descriptor selector is required.")
+
     indicator_codes = _resolve_codes(
-        requested=subjects,
+        requested=selected_subjects,
         current_labels=catalog.indicators,
         preferred_labels=legacy.preferred_subject_labels,
         workbook_aliases=legacy.subject_aliases,
@@ -184,25 +192,43 @@ def _resolve_selections(
         entity_name="subject descriptor",
         allow_multiple_matches=True,
     )
+    indicator_codes = [code for code in indicator_codes if code in set(available_indicator_codes)]
+    if not indicator_codes:
+        raise ValueError("No matching indicators are available for the selected countries.")
 
     selected_units = list(settings.units)
     selected_scales = list(settings.scales)
+    available_unit_labels = _available_legacy_labels(indicator_codes, legacy.indicator_units)
+    available_scale_labels = _available_legacy_labels(indicator_codes, legacy.indicator_scales)
     if settings.interactive and not selected_units:
         selected_units = _prompt_for_labels(
             "Select units",
-            _build_label_choices(_available_legacy_labels(indicator_codes, legacy.indicator_units), preselect_all=True),
+            _build_label_choices(available_unit_labels, preselect_all=True),
             required=False,
         )
     if settings.interactive and not selected_scales:
         selected_scales = _prompt_for_labels(
             "Select scales",
-            _build_label_choices(_available_legacy_labels(indicator_codes, legacy.indicator_scales), preselect_all=True),
+            _build_label_choices(available_scale_labels, preselect_all=True),
             required=False,
         )
 
     indicator_codes = _filter_indicator_codes(indicator_codes, selected_units, selected_scales, legacy)
     if not indicator_codes:
         raise ValueError("No WEO series match the selected Subject Descriptor, Units, and Scale combination.")
+
+    indicator_unit_labels = {
+        code: legacy.preferred_unit_labels.get(code, next(iter(legacy.indicator_units.get(code, {""})), ""))
+        for code in indicator_codes
+    }
+    indicator_scale_labels = {
+        code: legacy.preferred_scale_labels.get(code, next(iter(legacy.indicator_scales.get(code, {""})), ""))
+        for code in indicator_codes
+    }
+    indicator_unit_codes = {
+        code: _resolve_optional_code_from_label(indicator_unit_labels[code], catalog.units, aliases.units)
+        for code in indicator_codes
+    }
 
     scale_codes = _resolve_contextual_codes(
         requested=selected_scales,
@@ -212,8 +238,6 @@ def _resolve_selections(
         manual_aliases=aliases.scales,
         entity_name="scale",
     )
-    indicator_unit_codes = client.fetch_indicator_unit_codes(country_codes[0], indicator_codes, settings.frequency)
-    unit_codes: list[str] = []
 
     country_labels = {
         code: legacy.preferred_country_labels.get(code, catalog.countries[code]) for code in country_codes
@@ -226,20 +250,14 @@ def _resolve_selections(
         for code in indicator_unit_codes.values()
         if code
     }
-    scale_labels = {code: aliases.scale_display.get(code, catalog.scales.get(code, code)) for code in catalog.scales}
-    indicator_unit_labels = {
-        code: legacy.preferred_unit_labels.get(code, next(iter(legacy.indicator_units.get(code, {""})), ""))
-        for code in indicator_codes
-    }
-    indicator_scale_labels = {
-        code: legacy.preferred_scale_labels.get(code, next(iter(legacy.indicator_scales.get(code, {""})), ""))
-        for code in indicator_codes
+    scale_labels = {
+        code: aliases.scale_display.get(code, catalog.scales.get(code, code)) for code in catalog.scales
     }
 
     return ResolvedSelections(
         country_codes=country_codes,
         indicator_codes=indicator_codes,
-        unit_codes=unit_codes,
+        unit_codes=[code for code in indicator_unit_codes.values() if code],
         scale_codes=scale_codes,
         country_labels=country_labels,
         subject_labels=subject_labels,
@@ -322,6 +340,20 @@ def _resolve_contextual_codes(
     return resolved
 
 
+def _resolve_optional_code_from_label(
+    label: str,
+    current_labels: dict[str, str],
+    manual_aliases: dict[str, str],
+) -> str:
+    if not label:
+        return ""
+    normalized = normalize_label(label)
+    for code, current_label in current_labels.items():
+        if normalize_label(code) == normalized or normalize_label(current_label) == normalized:
+            return code
+    return manual_aliases.get(normalized, "")
+
+
 def _build_choice_map(
     current_labels: dict[str, str],
     preferred_labels: dict[str, str],
@@ -378,13 +410,10 @@ def _filter_indicator_codes(
 
 
 def _prompt_for_codes(prompt: str, choices: list[dict[str, Any]], required: bool = True) -> list[str]:
-    if questionary is None:
-        raise RuntimeError("Interactive mode requires questionary to be installed.")
-
-    result = questionary.checkbox(prompt, choices=choices).ask()
+    result = prompt_for_choices(prompt, choices, required=required)
     if required and not result:
         raise ValueError(f"{prompt} requires at least one selection.")
-    return list(result or [])
+    return result
 
 
 def _prompt_for_labels(prompt: str, choices: list[dict[str, Any]], required: bool = True) -> list[str]:

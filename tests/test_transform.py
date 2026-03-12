@@ -7,67 +7,31 @@ from weo_tools.imf import _build_dataframe
 
 
 def test_build_dataframe_normalizes_sdmx_response() -> None:
-    response = {
-        "data": {
-            "dataSets": [
-                {
-                    "series": {
-                        "0:0:0": {
-                            "attributes": [0, 0, 0, "9/13/2025"],
-                            "observations": {"0": ["3644636000000"], "1": ["3958780000000"]},
-                        }
-                    },
-                    "dimensionGroupAttributes": {
-                        ":0::": [None, None, 0, None, None, None, None, None, None, None, None, 0, None, None, None, 0, None]
-                    },
-                }
-            ],
-            "structures": [
-                {
-                    "dimensions": {
-                        "series": [
-                            {"id": "COUNTRY", "values": [{"id": "GBR"}]},
-                            {"id": "INDICATOR", "values": [{"id": "NGDPD"}]},
-                            {"id": "FREQUENCY", "values": [{"id": "A"}]},
-                        ],
-                        "observation": [
-                            {"id": "TIME_PERIOD", "values": [{"id": "2024"}, {"id": "2025"}]}
-                        ],
-                    },
-                    "attributes": {
-                        "series": [
-                            {"id": "SCALE", "values": [{"id": "9"}]},
-                            {"id": "DECIMALS_DISPLAYED", "values": [{"id": "3"}]},
-                            {"id": "OVERLAP", "values": [{"id": "OL"}]},
-                            {"id": "COUNTRY_UPDATE_DATE", "values": []},
-                        ],
-                        "dimensionGroup": [
-                            {"id": "FUNCTIONAL_CAT", "values": []},
-                            {"id": "INT_ACC_ITEM", "values": []},
-                            {"id": "NA_STO", "values": [{"id": "B1GQ"}]},
-                            {"id": "GFS_STO", "values": []},
-                            {"id": "COICOP_1999", "values": []},
-                            {"id": "TRADE_FLOW", "values": []},
-                            {"id": "COMMODITY", "values": []},
-                            {"id": "SOC_CONCEPTS", "values": []},
-                            {"id": "SECTOR", "values": []},
-                            {"id": "ACCOUNTING_ENTRY", "values": []},
-                            {"id": "INDEX_TYPE", "values": []},
-                            {"id": "PRICES", "values": [{"id": "V"}]},
-                            {"id": "STATISTICAL_MEASURES", "values": []},
-                            {"id": "EXRATE", "values": []},
-                            {"id": "TRANSFORMATION", "values": []},
-                            {"id": "UNIT", "values": [{"id": "USD"}]},
-                            {"id": "REPORTING_PERIOD_TYPE", "values": []},
-                        ],
-                    },
-                }
-            ],
-        }
-    }
+    csv_frame = pd.DataFrame(
+        [
+            {
+                "COUNTRY": "GBR",
+                "INDICATOR": "NGDPD",
+                "FREQUENCY": "A",
+                "TIME_PERIOD": "2024",
+                "OBS_VALUE": "3644636000000",
+                "SCALE": "9",
+                "COUNTRY_UPDATE_DATE": "9/13/2025",
+            },
+            {
+                "COUNTRY": "GBR",
+                "INDICATOR": "NGDPD",
+                "FREQUENCY": "A",
+                "TIME_PERIOD": "2025",
+                "OBS_VALUE": "3958780000000",
+                "SCALE": "9",
+                "COUNTRY_UPDATE_DATE": "9/13/2025",
+            },
+        ]
+    )
 
     dataframe = _build_dataframe(
-        response=response,
+        csv_frame=csv_frame,
         dataset_version="9.0.0",
         country_labels={"GBR": "United Kingdom"},
         subject_labels={"NGDPD": "Gross domestic product, current prices"},

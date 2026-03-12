@@ -2,11 +2,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+from io import StringIO
 from typing import Any
-from urllib.parse import quote, urlencode
-from urllib.request import Request, urlopen
 
 import pandas as pd
+from pysdmx.api.qb import (
+    ApiVersion,
+    AvailabilityMode,
+    AvailabilityQuery,
+    DataContext,
+    DataFormat,
+    DataQuery,
+    RestService,
+    StructureDetail,
+    StructureFormat,
+    StructureQuery,
+    StructureType,
+)
 
 
 API_BASE = "https://api.imf.org/external/sdmx/3.0"
@@ -31,12 +43,27 @@ class Catalog:
 class ImfWeoClient:
     def __init__(self) -> None:
         self._catalog: Catalog | None = None
+        self._service = RestService(
+            API_BASE,
+            ApiVersion.V2_0_0,
+            data_format=DataFormat.SDMX_CSV_2_1_0,
+            structure_format=StructureFormat.SDMX_JSON_2_0_0,
+            timeout=60,
+        )
 
     def fetch_catalog(self) -> Catalog:
         if self._catalog is not None:
             return self._catalog
 
-        dataflow = self._fetch_json("/structure/dataflow/IMF.RES/WEO/+?detail=full")
+        dataflow = self._fetch_structure_json(
+            StructureQuery(
+                artefact_type=StructureType.DATAFLOW,
+                agency_id="IMF.RES",
+                resource_id="WEO",
+                version="+",
+                detail=StructureDetail.FULL,
+            )
+        )
         flow = dataflow["data"]["dataflows"][0]
         updated_at = ""
         for annotation in flow.get("annotations", []):
@@ -59,23 +86,30 @@ class ImfWeoClient:
         )
         return self._catalog
 
-    def fetch_available_attributes(
+    def fetch_available_indicator_codes(
         self,
         country_codes: list[str],
-        indicator_codes: list[str],
         frequency: str,
-    ) -> list[dict[str, str]]:
-        preview = self._fetch_data_response(
-            country_codes=country_codes,
-            indicator_codes=indicator_codes,
-            frequency=frequency,
-            unit_codes=[],
-            scale_codes=[],
-            start_year=None,
-            end_year=None,
-            preview_only=True,
-        )
-        return _extract_series_metadata(preview)
+    ) -> list[str]:
+        common_codes: set[str] | None = None
+        for country_code in country_codes:
+            query = AvailabilityQuery(
+                context=DataContext.DATAFLOW,
+                agency_id="IMF.RES",
+                resource_id="WEO",
+                version="+",
+                key=f"{country_code}.*.{frequency}",
+                component_id="INDICATOR",
+                mode=AvailabilityMode.AVAILABLE,
+            )
+            payload = self._fetch_availability_json(query)
+            values = _extract_constraint_values(payload, "INDICATOR")
+            if common_codes is None:
+                common_codes = set(values)
+            else:
+                common_codes &= set(values)
+
+        return sorted(common_codes or set())
 
     def fetch_dataframe(
         self,
@@ -94,19 +128,21 @@ class ImfWeoClient:
         indicator_unit_codes: dict[str, str],
         indicator_scale_labels: dict[str, str],
     ) -> pd.DataFrame:
-        response = self._fetch_data_response(
-            country_codes=country_codes,
-            indicator_codes=indicator_codes,
-            frequency=frequency,
-            unit_codes=unit_codes,
-            scale_codes=scale_codes,
-            start_year=None,
-            end_year=None,
-            preview_only=False,
+        query = DataQuery(
+            context=DataContext.DATAFLOW,
+            agency_id="IMF.RES",
+            resource_id="WEO",
+            version="+",
+            key=self._build_key(country_codes, indicator_codes, frequency),
+            components=None,
+            obs_dimension="TIME_PERIOD",
+            attributes="dsd",
         )
+        raw_csv = self._service.data(query).decode("utf-8")
+        csv_frame = _read_sdmx_csv(raw_csv)
         release = self.fetch_catalog().release
         dataframe = _build_dataframe(
-            response=response,
+            csv_frame=csv_frame,
             dataset_version=release.version,
             country_labels=country_labels,
             subject_labels=subject_labels,
@@ -122,45 +158,29 @@ class ImfWeoClient:
             dataframe = dataframe[dataframe["time_period"] <= end_year]
         return dataframe.reset_index(drop=True)
 
-    def fetch_indicator_unit_codes(
-        self,
-        country_code: str,
-        indicator_codes: list[str],
-        frequency: str,
-    ) -> dict[str, str]:
-        codes: dict[str, str] = {}
-        for indicator_code in indicator_codes:
-            preview = self._fetch_data_response(
-                country_codes=[country_code],
-                indicator_codes=[indicator_code],
-                frequency=frequency,
-                unit_codes=[],
-                scale_codes=[],
-                start_year=None,
-                end_year=None,
-                preview_only=True,
-            )
-            rows = _extract_series_metadata(preview)
-            codes[indicator_code] = rows[0]["unit_code"] if rows else ""
-        return codes
-
     def _fetch_codelist(self, agency: str, resource_id: str) -> dict[str, str]:
-        payload = self._fetch_json(f"/structure/codelist/{agency}/{resource_id}/+/*?detail=full")
+        payload = self._fetch_structure_json(
+            StructureQuery(
+                artefact_type=StructureType.CODELIST,
+                agency_id=agency,
+                resource_id=resource_id,
+                version="+",
+                item_id="*",
+                detail=StructureDetail.FULL,
+            )
+        )
         codes = payload["data"]["codelists"][0].get("codes", [])
         return {item["id"]: item["name"] for item in codes}
 
-    def _fetch_data_response(
-        self,
-        country_codes: list[str],
-        indicator_codes: list[str],
-        frequency: str,
-        unit_codes: list[str],
-        scale_codes: list[str],
-        start_year: int | None,
-        end_year: int | None,
-        preview_only: bool,
-    ) -> dict[str, Any]:
-        key = ".".join(
+    def _fetch_structure_json(self, query: StructureQuery) -> dict[str, Any]:
+        return json.loads(self._service.structure(query).decode("utf-8"))
+
+    def _fetch_availability_json(self, query: AvailabilityQuery) -> dict[str, Any]:
+        return json.loads(self._service.availability(query).decode("utf-8"))
+
+    @staticmethod
+    def _build_key(country_codes: list[str], indicator_codes: list[str], frequency: str) -> str:
+        return ".".join(
             [
                 "+".join(country_codes) if country_codes else "*",
                 "+".join(indicator_codes) if indicator_codes else "*",
@@ -168,76 +188,27 @@ class ImfWeoClient:
             ]
         )
 
-        params: list[tuple[str, str]] = [("dimensionAtObservation", "TIME_PERIOD"), ("attributes", "dsd")]
-        if preview_only:
-            params.append(("firstNObservations", "1"))
-        if unit_codes:
-            params.append(("c[UNIT]", "+".join(unit_codes)))
-        if scale_codes:
-            params.append(("c[SCALE]", "+".join(scale_codes)))
-        query = urlencode(params, quote_via=quote)
-        path = f"/data/dataflow/IMF.RES/WEO/+/{key}?{query}"
-        return self._fetch_json(path)
 
-    def _fetch_json(self, path: str) -> dict[str, Any]:
-        url = f"{API_BASE}{path}"
-        request = Request(url, headers={"Accept": "application/json", "User-Agent": "weo-tools/1.0"})
-        with urlopen(request, timeout=60) as response:
-            return json.load(response)
+def _extract_constraint_values(payload: dict[str, Any], component_id: str) -> list[str]:
+    constraints = payload.get("data", {}).get("dataConstraints", [])
+    if not constraints:
+        return []
+    for region in constraints[0].get("cubeRegions", []):
+        for component in region.get("components", []):
+            if component.get("id") == component_id:
+                return [value["value"] for value in component.get("values", [])]
+    return []
 
 
-def _extract_series_metadata(response: dict[str, Any]) -> list[dict[str, str]]:
-    structure = response["data"]["structures"][0]
-    data_set = response["data"]["dataSets"][0]
-
-    series_dimensions = structure["dimensions"]["series"]
-    series_attr_defs = structure["attributes"]["series"]
-    group_attr_defs = structure["attributes"].get("dimensionGroup", [])
-
-    unit_attr_index = _attribute_definition_index(group_attr_defs, "UNIT")
-    scale_attr_index = _attribute_definition_index(series_attr_defs, "SCALE")
-    country_update_index = _attribute_definition_index(series_attr_defs, "COUNTRY_UPDATE_DATE")
-
-    unit_codes_by_indicator: dict[int, str] = {}
-    for group_key, values in data_set.get("dimensionGroupAttributes", {}).items():
-        indicator_idx = _indicator_index_from_group_key(group_key)
-        if indicator_idx is None or unit_attr_index is None:
-            continue
-        value_index = values[unit_attr_index]
-        if value_index is None:
-            continue
-        unit_codes_by_indicator[indicator_idx] = group_attr_defs[unit_attr_index]["values"][value_index]["id"]
-
-    series_rows: list[dict[str, str]] = []
-    for series_key, series_value in data_set.get("series", {}).items():
-        key_indexes = [int(part) for part in series_key.split(":") if part != ""]
-        country_idx, indicator_idx, frequency_idx = key_indexes
-        scale_code = ""
-        country_update_date = ""
-        attributes = series_value.get("attributes", [])
-        if scale_attr_index is not None and scale_attr_index < len(attributes):
-            scale_index = attributes[scale_attr_index]
-            if scale_index is not None:
-                scale_code = series_attr_defs[scale_attr_index]["values"][scale_index]["id"]
-        if country_update_index is not None and country_update_index < len(attributes):
-            country_update_date = attributes[country_update_index] or ""
-
-        series_rows.append(
-            {
-                "country_code": series_dimensions[0]["values"][country_idx]["id"],
-                "indicator_code": series_dimensions[1]["values"][indicator_idx]["id"],
-                "frequency": series_dimensions[2]["values"][frequency_idx]["id"],
-                "unit_code": unit_codes_by_indicator.get(indicator_idx, ""),
-                "scale_code": scale_code,
-                "country_update_date": country_update_date,
-            }
-        )
-
-    return series_rows
+def _read_sdmx_csv(raw_csv: str) -> pd.DataFrame:
+    dataframe = pd.read_csv(StringIO(raw_csv), keep_default_na=False)
+    dataframe.columns = [column.replace("[;]", "").strip() for column in dataframe.columns]
+    dataframe = dataframe.dropna(axis=1, how="all")
+    return dataframe
 
 
 def _build_dataframe(
-    response: dict[str, Any],
+    csv_frame: pd.DataFrame,
     dataset_version: str,
     country_labels: dict[str, str],
     subject_labels: dict[str, str],
@@ -262,54 +233,34 @@ def _build_dataframe(
         "obs_value",
         "country_update_date",
     ]
-    structure = response["data"]["structures"][0]
-    data_set = response["data"]["dataSets"][0]
-    series_meta = _extract_series_metadata(response)
-    series_lookup = {
-        (item["country_code"], item["indicator_code"], item["frequency"]): item
-        for item in series_meta
-    }
-
-    series_dimensions = structure["dimensions"]["series"]
-    time_dimension = structure["dimensions"]["observation"][0]["values"]
+    if csv_frame.empty:
+        return pd.DataFrame(columns=columns)
 
     rows: list[dict[str, Any]] = []
-    for series_key, series_value in data_set.get("series", {}).items():
-        key_indexes = [int(part) for part in series_key.split(":") if part != ""]
-        country_code = series_dimensions[0]["values"][key_indexes[0]]["id"]
-        indicator_code = series_dimensions[1]["values"][key_indexes[1]]["id"]
-        frequency = series_dimensions[2]["values"][key_indexes[2]]["id"]
-        meta = series_lookup[(country_code, indicator_code, frequency)]
+    for row in csv_frame.itertuples(index=False):
+        row_dict = row._asdict()
+        indicator_code = row_dict["INDICATOR"]
+        unit_code = indicator_unit_codes.get(indicator_code, "")
+        scale_code = str(row_dict.get("SCALE", "") or "")
+        rows.append(
+            {
+                "dataset_version": dataset_version,
+                "country_code": row_dict["COUNTRY"],
+                "country": country_labels[row_dict["COUNTRY"]],
+                "indicator_code": indicator_code,
+                "subject_descriptor": subject_labels[indicator_code],
+                "unit_code": unit_code,
+                "units": unit_labels.get(unit_code, indicator_unit_labels.get(indicator_code, "")),
+                "scale_code": scale_code,
+                "scale": scale_labels.get(scale_code, indicator_scale_labels.get(indicator_code, scale_code)),
+                "frequency": row_dict["FREQUENCY"],
+                "time_period": int(row_dict["TIME_PERIOD"]),
+                "obs_value": _coerce_value(row_dict["OBS_VALUE"]),
+                "country_update_date": str(row_dict.get("COUNTRY_UPDATE_DATE", "") or ""),
+            }
+        )
 
-        for observation_key, observation_value in series_value.get("observations", {}).items():
-            time_entry = time_dimension[int(observation_key)]
-            time_period = int(time_entry.get("id", time_entry.get("value")))
-            raw_value = observation_value[0] if observation_value else None
-            rows.append(
-                {
-                    "dataset_version": dataset_version,
-                    "country_code": country_code,
-                    "country": country_labels[country_code],
-                    "indicator_code": indicator_code,
-                    "subject_descriptor": subject_labels[indicator_code],
-                    "unit_code": meta["unit_code"] or indicator_unit_codes.get(indicator_code, ""),
-                    "units": unit_labels.get(
-                        meta["unit_code"] or indicator_unit_codes.get(indicator_code, ""),
-                        indicator_unit_labels.get(indicator_code, meta["unit_code"]),
-                    ),
-                    "scale_code": meta["scale_code"],
-                    "scale": scale_labels.get(meta["scale_code"], indicator_scale_labels.get(indicator_code, meta["scale_code"])),
-                    "frequency": frequency,
-                    "time_period": time_period,
-                    "obs_value": _coerce_value(raw_value),
-                    "country_update_date": meta["country_update_date"],
-                }
-            )
-
-    dataframe = pd.DataFrame(rows, columns=columns)
-    if dataframe.empty:
-        return dataframe
-    return dataframe.sort_values(
+    return pd.DataFrame(rows, columns=columns).sort_values(
         ["country", "subject_descriptor", "units", "scale", "time_period"],
         ignore_index=True,
     )
@@ -322,17 +273,3 @@ def _coerce_value(value: Any) -> Any:
         return float(value)
     except (TypeError, ValueError):
         return pd.NA
-
-
-def _attribute_definition_index(definitions: list[dict[str, Any]], attribute_id: str) -> int | None:
-    for index, definition in enumerate(definitions):
-        if definition["id"] == attribute_id:
-            return index
-    return None
-
-
-def _indicator_index_from_group_key(key: str) -> int | None:
-    parts = key.split(":")
-    if len(parts) < 2 or not parts[1]:
-        return None
-    return int(parts[1])

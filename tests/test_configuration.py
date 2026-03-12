@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from argparse import Namespace
 
-from weo_tools.app import _resolve_codes
+from weo_tools.app import _resolve_codes, _resolve_optional_code_from_label
 from weo_tools.configuration import RuntimeSettings, merge_settings
 
 
@@ -60,3 +60,13 @@ def test_subject_resolution_can_expand_to_multiple_indicator_codes() -> None:
     )
 
     assert resolved == ["NGDP", "NGDPD"]
+
+
+def test_optional_unit_code_resolution_uses_aliases() -> None:
+    resolved = _resolve_optional_code_from_label(
+        "National currency",
+        current_labels={"USD": "US dollar", "XDC": "Domestic currency"},
+        manual_aliases={"national currency": "XDC"},
+    )
+
+    assert resolved == "XDC"

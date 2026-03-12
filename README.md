@@ -3,12 +3,15 @@
 This repo contains two small Python entrypoints for the IMF World Economic
 Outlook database:
 
-- `weo_to_dataframe.py` pulls selected WEO series into a tidy pandas dataframe.
+- `weo_dataframe_demo.ipynb` is the primary analysis example and shows how to
+  pull WEO data with `pysdmx`.
+- `weo_to_dataframe.py` remains as a thin dataframe/export wrapper for
+  automation.
 - `weo_to_excel.py` exports the selected series to a legacy-style wide Excel
   sheet that starts with `Country`, `Subject Descriptor`, `Units`, and `Scale`.
 
-Both scripts query the IMF SDMX 3.0 API using the latest stable WEO release via
-`IMF.RES/WEO/+`.
+The backend uses `pysdmx[all]` for SDMX query construction and IMF service
+access, targeting the latest stable WEO release via `IMF.RES/WEO/+`.
 
 ## Setup
 
@@ -59,5 +62,11 @@ python weo_to_excel.py --country "United Kingdom" --subject-descriptor "Gross do
 Interactive selection:
 
 ```powershell
-python weo_to_excel.py --interactive
+python weo_to_excel.py
 ```
+
+If you launch either script with no arguments, it opens a searchable multi-select
+TUI for each required selector. Type to filter the list, use `Up`/`Down` to
+move, `Space` to mark items, and press `Enter` to confirm each step. The app
+shows a loading spinner while it checks valid next-step selectors and while it
+fetches the data.
