@@ -8,11 +8,14 @@ from time import sleep
 from typing import Any, Callable, TypeVar
 
 from prompt_toolkit.application import Application
+from prompt_toolkit.application.current import get_app_or_none
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Dimension, HSplit, Layout, Window
 from prompt_toolkit.layout.containers import ConditionalContainer
 from prompt_toolkit.layout.controls import FormattedTextControl
+from prompt_toolkit.layout.margins import ScrollbarMargin
+from prompt_toolkit.mouse_events import MouseEvent, MouseEventType
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Frame, TextArea
 
@@ -30,10 +33,17 @@ class Choice:
 
 
 class SearchableMultiSelect:
-    def __init__(self, title: str, choices: list[Choice], required: bool = True) -> None:
+    def __init__(
+        self,
+        title: str,
+        choices: list[Choice],
+        required: bool = True,
+        max_selections: int | None = None,
+    ) -> None:
         self.title = title
         self.choices = choices
         self.required = required
+        self.max_selections = max_selections
         self.selected = {choice.value for choice in choices if choice.checked}
         self.cursor = 0
         self.error_message = ""
@@ -46,12 +56,15 @@ class SearchableMultiSelect:
             wrap_lines=False,
             always_hide_cursor=True,
             height=Dimension(min=10, max=18),
+            right_margins=[ScrollbarMargin(display_arrows=True)],
         )
         self.error_control = FormattedTextControl(self._render_error)
         self.style = Style.from_dict(
             {
                 "title": "bold",
-                "selected": "reverse",
+                "active": "bg:ansiblue fg:ansiwhite bold",
+                "checked": "fg:ansigreen",
+                "checked-active": "bg:ansiblue fg:ansiwhite bold",
                 "muted": "italic",
                 "error": "fg:ansired",
             }
@@ -65,7 +78,7 @@ class SearchableMultiSelect:
                     content=FormattedTextControl(
                         [
                             ("class:title", self.title),
-                            ("", "\nUse Up/Down to move, Space to toggle, type to search, Enter to confirm, Esc to cancel."),
+                            ("", f"\n{self._instructions()}"),
                         ]
                     ),
                     height=2,
@@ -82,13 +95,18 @@ class SearchableMultiSelect:
             layout=Layout(root, focused_element=self.search),
             key_bindings=bindings,
             full_screen=True,
-            mouse_support=False,
+            mouse_support=True,
             style=self.style,
         )
         result = application.run()
         if result is None:
             raise KeyboardInterrupt("Selection cancelled.")
         return result
+
+    def _instructions(self) -> str:
+        if self.max_selections == 1:
+            return "Use Up/Down to move, Space to select, type to search, Enter to confirm, Esc to cancel."
+        return "Use Up/Down to move, Space to toggle, type to search, Enter to confirm, Esc to cancel."
 
     def _bindings(self) -> KeyBindings:
         kb = KeyBindings()
@@ -182,14 +200,46 @@ class SearchableMultiSelect:
         choice = self.choices[filtered[self.cursor]]
         if choice.value in self.selected:
             self.selected.remove(choice.value)
-        else:
-            self.selected.add(choice.value)
+            return
+        if self.max_selections == 1:
+            self.selected = {choice.value}
+            return
+        self.selected.add(choice.value)
 
     def _selected_values(self) -> list[str]:
         return [choice.value for choice in self.choices if choice.value in self.selected]
 
-    def _render_choices(self) -> list[tuple[str, str]]:
-        fragments: list[tuple[str, str]] = []
+    def _choice_style(self, visible_index: int, checked: bool) -> str:
+        if visible_index == self.cursor:
+            return "class:checked-active" if checked else "class:active"
+        if checked:
+            return "class:checked"
+        return ""
+
+    def _row_mouse_handler(self, visible_index: int) -> Callable[[MouseEvent], object | None]:
+        def handler(mouse_event: MouseEvent) -> object | None:
+            app = get_app_or_none()
+            if app is not None:
+                app.layout.focus(self.list_window)
+
+            if mouse_event.event_type == MouseEventType.MOUSE_UP:
+                self.cursor = visible_index
+                self._toggle_current()
+            elif mouse_event.event_type == MouseEventType.SCROLL_DOWN:
+                self._move(1)
+            elif mouse_event.event_type == MouseEventType.SCROLL_UP:
+                self._move(-1)
+            else:
+                return NotImplemented
+
+            if app is not None:
+                app.invalidate()
+            return None
+
+        return handler
+
+    def _render_choices(self) -> list[tuple[str, str] | tuple[str, str, Callable[[MouseEvent], object | None]]]:
+        fragments: list[tuple[str, str] | tuple[str, str, Callable[[MouseEvent], object | None]]] = []
         filtered = self._filtered_indexes()
         if not filtered:
             return [("class:muted", "No matches.\n")]
@@ -197,8 +247,12 @@ class SearchableMultiSelect:
         for visible_index, choice_index in enumerate(filtered):
             choice = self.choices[choice_index]
             prefix = "[x]" if choice.value in self.selected else "[ ]"
-            style = "class:selected" if visible_index == self.cursor else ""
-            fragments.append((style, f"{prefix} {choice.name}\n"))
+            style = self._choice_style(visible_index, choice.value in self.selected)
+            handler = self._row_mouse_handler(visible_index)
+            if visible_index == self.cursor:
+                fragments.append(("[SetCursorPosition]", "", handler))
+            fragments.append((style, f"{prefix} {choice.name}", handler))
+            fragments.append((style, "\n", handler))
         return fragments
 
     def _render_error(self) -> list[tuple[str, str]]:
@@ -211,6 +265,12 @@ def prompt_for_choices(title: str, raw_choices: list[dict[str, Any]], required: 
         for item in raw_choices
     ]
     return SearchableMultiSelect(title=title, choices=choices, required=required).run()
+
+
+def prompt_for_choice(title: str, raw_choices: list[dict[str, Any]]) -> str:
+    choices = [Choice(name=str(item["name"]), value=str(item["value"])) for item in raw_choices]
+    result = SearchableMultiSelect(title=title, choices=choices, required=True, max_selections=1).run()
+    return result[0]
 
 
 def run_with_status(message: str, func: Callable[..., T], /, *args: Any, **kwargs: Any) -> T:

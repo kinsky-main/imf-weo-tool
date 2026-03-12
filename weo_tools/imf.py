@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from io import StringIO
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 from pysdmx.api.qb import (
@@ -91,25 +91,22 @@ class ImfWeoClient:
         country_codes: list[str],
         frequency: str,
     ) -> list[str]:
-        common_codes: set[str] | None = None
-        for country_code in country_codes:
-            query = AvailabilityQuery(
-                context=DataContext.DATAFLOW,
-                agency_id="IMF.RES",
-                resource_id="WEO",
-                version="+",
-                key=f"{country_code}.*.{frequency}",
-                component_id="INDICATOR",
-                mode=AvailabilityMode.AVAILABLE,
-            )
-            payload = self._fetch_availability_json(query)
-            values = _extract_constraint_values(payload, "INDICATOR")
-            if common_codes is None:
-                common_codes = set(values)
-            else:
-                common_codes &= set(values)
+        return self._fetch_common_available_codes(
+            values=country_codes,
+            component_id="INDICATOR",
+            key_builder=lambda country_code: f"{country_code}.*.{frequency}",
+        )
 
-        return sorted(common_codes or set())
+    def fetch_available_country_codes(
+        self,
+        indicator_codes: list[str],
+        frequency: str,
+    ) -> list[str]:
+        return self._fetch_common_available_codes(
+            values=indicator_codes,
+            component_id="REF_AREA",
+            key_builder=lambda indicator_code: f"*.{indicator_code}.{frequency}",
+        )
 
     def fetch_dataframe(
         self,
@@ -157,6 +154,32 @@ class ImfWeoClient:
         if end_year is not None:
             dataframe = dataframe[dataframe["time_period"] <= end_year]
         return dataframe.reset_index(drop=True)
+
+    def _fetch_common_available_codes(
+        self,
+        *,
+        values: list[str],
+        component_id: str,
+        key_builder: Callable[[str], str],
+    ) -> list[str]:
+        common_codes: set[str] | None = None
+        for value in values:
+            query = AvailabilityQuery(
+                context=DataContext.DATAFLOW,
+                agency_id="IMF.RES",
+                resource_id="WEO",
+                version="+",
+                key=key_builder(value),
+                component_id=component_id,
+                mode=AvailabilityMode.AVAILABLE,
+            )
+            payload = self._fetch_availability_json(query)
+            matching_codes = set(_extract_constraint_values(payload, component_id))
+            if common_codes is None:
+                common_codes = matching_codes
+            else:
+                common_codes &= matching_codes
+        return sorted(common_codes or set())
 
     def _fetch_codelist(self, agency: str, resource_id: str) -> dict[str, str]:
         payload = self._fetch_structure_json(

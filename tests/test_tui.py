@@ -1,6 +1,43 @@
 from __future__ import annotations
 
+from prompt_toolkit.data_structures import Point
+from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
+
 from weo_tools.tui import Choice, SearchableMultiSelect
+
+
+def _split_rows(fragments: list[tuple[object, ...]]) -> list[list[tuple[object, ...]]]:
+    rows: list[list[tuple[object, ...]]] = []
+    current: list[tuple[object, ...]] = []
+    for fragment in fragments:
+        current.append(fragment)
+        if "\n" in str(fragment[1]):
+            rows.append(current)
+            current = []
+    if current:
+        rows.append(current)
+    return rows
+
+
+def _row_handler(prompt: SearchableMultiSelect, row_index: int):
+    remaining = row_index
+    for row in _split_rows(prompt._render_choices()):
+        if remaining == 0:
+            for fragment in row:
+                if len(fragment) >= 3:
+                    return fragment[2]
+            break
+        remaining -= 1
+    raise AssertionError(f"No handler found for row {row_index}")
+
+
+def _mouse_event(event_type: MouseEventType, y: int, button: MouseButton) -> MouseEvent:
+    return MouseEvent(
+        position=Point(x=0, y=y),
+        event_type=event_type,
+        button=button,
+        modifiers=frozenset(),
+    )
 
 
 def test_searchable_multiselect_filters_by_typed_terms() -> None:
@@ -28,3 +65,93 @@ def test_searchable_multiselect_preserves_selected_values() -> None:
     )
 
     assert prompt._selected_values() == ["usd"]
+
+
+def test_searchable_multiselect_single_choice_replaces_previous_selection() -> None:
+    prompt = SearchableMultiSelect(
+        "Choose selection order",
+        [
+            Choice(name="Country first", value="country-first"),
+            Choice(name="Indicator first", value="indicator-first"),
+        ],
+        max_selections=1,
+    )
+
+    prompt._toggle_current()
+    prompt._move(1)
+    prompt._toggle_current()
+
+    assert prompt._selected_values() == ["indicator-first"]
+
+
+def test_render_choices_marks_active_row_for_scrolling() -> None:
+    prompt = SearchableMultiSelect(
+        "Select countries",
+        [
+            Choice(name="United Kingdom [GBR]", value="GBR"),
+            Choice(name="United States [USA]", value="USA"),
+        ],
+    )
+    prompt.cursor = 1
+
+    rows = _split_rows(prompt._render_choices())
+
+    assert any(fragment[0] == "[SetCursorPosition]" for fragment in rows[1])
+    assert any(fragment[0] == "class:active" for fragment in rows[1] if fragment[1])
+
+
+def test_mouse_click_moves_cursor_and_toggles_item() -> None:
+    prompt = SearchableMultiSelect(
+        "Select countries",
+        [
+            Choice(name="United Kingdom [GBR]", value="GBR"),
+            Choice(name="United States [USA]", value="USA"),
+        ],
+    )
+
+    handler = _row_handler(prompt, 1)
+    handler(_mouse_event(MouseEventType.MOUSE_UP, y=1, button=MouseButton.LEFT))
+
+    assert prompt.cursor == 1
+    assert prompt._selected_values() == ["USA"]
+
+
+def test_mouse_wheel_moves_cursor_within_bounds() -> None:
+    prompt = SearchableMultiSelect(
+        "Select countries",
+        [
+            Choice(name="United Kingdom [GBR]", value="GBR"),
+            Choice(name="United States [USA]", value="USA"),
+            Choice(name="Austria [AUT]", value="AUT"),
+        ],
+    )
+
+    handler = _row_handler(prompt, 0)
+
+    handler(_mouse_event(MouseEventType.SCROLL_UP, y=0, button=MouseButton.NONE))
+    assert prompt.cursor == 0
+
+    handler(_mouse_event(MouseEventType.SCROLL_DOWN, y=0, button=MouseButton.NONE))
+    handler(_mouse_event(MouseEventType.SCROLL_DOWN, y=0, button=MouseButton.NONE))
+    handler(_mouse_event(MouseEventType.SCROLL_DOWN, y=0, button=MouseButton.NONE))
+    assert prompt.cursor == 2
+
+    handler(_mouse_event(MouseEventType.SCROLL_UP, y=0, button=MouseButton.NONE))
+    assert prompt.cursor == 1
+
+
+def test_no_matches_disables_cursor_movement() -> None:
+    prompt = SearchableMultiSelect(
+        "Select countries",
+        [
+            Choice(name="United Kingdom [GBR]", value="GBR"),
+            Choice(name="United States [USA]", value="USA"),
+        ],
+    )
+    prompt.search.text = "zzz"
+    prompt._reset_cursor(None)
+
+    assert prompt._render_choices() == [("class:muted", "No matches.\n")]
+
+    prompt._move(1)
+    assert prompt.cursor == -1
