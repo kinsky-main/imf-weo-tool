@@ -67,6 +67,19 @@ def test_searchable_multiselect_preserves_selected_values() -> None:
     assert prompt._selected_values() == ["usd"]
 
 
+def test_searchable_multiselect_instructions_include_visible_bulk_actions() -> None:
+    prompt = SearchableMultiSelect(
+        "Select countries",
+        [
+            Choice(name="United Kingdom [GBR]", value="GBR"),
+            Choice(name="Austria [AUT]", value="AUT"),
+        ],
+    )
+
+    assert "Ctrl-A to select visible" in prompt._instructions()
+    assert "Ctrl-D to clear visible" in prompt._instructions()
+
+
 def test_searchable_multiselect_single_choice_replaces_previous_selection() -> None:
     prompt = SearchableMultiSelect(
         "Choose selection order",
@@ -98,6 +111,53 @@ def test_render_choices_marks_active_row_for_scrolling() -> None:
 
     assert any(fragment[0] == "[SetCursorPosition]" for fragment in rows[1])
     assert any(fragment[0] == "class:active" for fragment in rows[1] if fragment[1])
+
+
+def test_render_choices_includes_detail_suffix() -> None:
+    prompt = SearchableMultiSelect(
+        "Select countries",
+        [
+            Choice(name="United Kingdom [GBR]", value="GBR", detail="2/3 subjects"),
+        ],
+    )
+
+    fragments = prompt._render_choices()
+
+    assert any("2/3 subjects" in str(fragment[1]) for fragment in fragments)
+
+
+def test_select_visible_only_selects_filtered_rows() -> None:
+    prompt = SearchableMultiSelect(
+        "Select countries",
+        [
+            Choice(name="United Kingdom [GBR]", value="GBR"),
+            Choice(name="United States [USA]", value="USA"),
+            Choice(name="Austria [AUT]", value="AUT"),
+        ],
+        required=False,
+    )
+    prompt.search.text = "united"
+
+    prompt._select_visible()
+
+    assert prompt._selected_values() == ["GBR", "USA"]
+
+
+def test_clear_visible_only_clears_filtered_rows() -> None:
+    prompt = SearchableMultiSelect(
+        "Select countries",
+        [
+            Choice(name="United Kingdom [GBR]", value="GBR", checked=True),
+            Choice(name="United States [USA]", value="USA", checked=True),
+            Choice(name="Austria [AUT]", value="AUT", checked=True),
+        ],
+        required=False,
+    )
+    prompt.search.text = "united"
+
+    prompt._clear_visible()
+
+    assert prompt._selected_values() == ["AUT"]
 
 
 def test_mouse_click_moves_cursor_and_toggles_item() -> None:

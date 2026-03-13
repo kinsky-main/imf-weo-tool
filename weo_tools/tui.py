@@ -30,6 +30,7 @@ class Choice:
     name: str
     value: str
     checked: bool = False
+    detail: str = ""
 
 
 class SearchableMultiSelect:
@@ -106,7 +107,10 @@ class SearchableMultiSelect:
     def _instructions(self) -> str:
         if self.max_selections == 1:
             return "Use Up/Down to move, Space to select, type to search, Enter to confirm, Esc to cancel."
-        return "Use Up/Down to move, Space to toggle, type to search, Enter to confirm, Esc to cancel."
+        return (
+            "Use Up/Down to move, Space to toggle, type to search, Ctrl-A to select visible, "
+            "Ctrl-D to clear visible, Enter to confirm, Esc to cancel."
+        )
 
     def _bindings(self) -> KeyBindings:
         kb = KeyBindings()
@@ -149,6 +153,18 @@ class SearchableMultiSelect:
                 event.app.layout.focus(self.list_window)
             else:
                 event.app.layout.focus(self.search)
+
+        @kb.add("c-a")
+        def _select_all_visible(event: Any) -> None:
+            if event.app.layout.has_focus(self.list_window):
+                self._select_visible()
+                event.app.invalidate()
+
+        @kb.add("c-d")
+        def _clear_all_visible(event: Any) -> None:
+            if event.app.layout.has_focus(self.list_window):
+                self._clear_visible()
+                event.app.invalidate()
 
         @kb.add("enter")
         def _submit(event: Any) -> None:
@@ -209,6 +225,18 @@ class SearchableMultiSelect:
     def _selected_values(self) -> list[str]:
         return [choice.value for choice in self.choices if choice.value in self.selected]
 
+    def _select_visible(self) -> None:
+        if self.max_selections == 1:
+            return
+        for choice_index in self._filtered_indexes():
+            self.selected.add(self.choices[choice_index].value)
+
+    def _clear_visible(self) -> None:
+        if self.max_selections == 1:
+            return
+        for choice_index in self._filtered_indexes():
+            self.selected.discard(self.choices[choice_index].value)
+
     def _choice_style(self, visible_index: int, checked: bool) -> str:
         if visible_index == self.cursor:
             return "class:checked-active" if checked else "class:active"
@@ -249,9 +277,12 @@ class SearchableMultiSelect:
             prefix = "[x]" if choice.value in self.selected else "[ ]"
             style = self._choice_style(visible_index, choice.value in self.selected)
             handler = self._row_mouse_handler(visible_index)
+            label = f"{prefix} {choice.name}"
+            if choice.detail:
+                label = f"{label}  {choice.detail}"
             if visible_index == self.cursor:
                 fragments.append(("[SetCursorPosition]", "", handler))
-            fragments.append((style, f"{prefix} {choice.name}", handler))
+            fragments.append((style, label, handler))
             fragments.append((style, "\n", handler))
         return fragments
 
@@ -261,7 +292,12 @@ class SearchableMultiSelect:
 
 def prompt_for_choices(title: str, raw_choices: list[dict[str, Any]], required: bool = True) -> list[str]:
     choices = [
-        Choice(name=str(item["name"]), value=str(item["value"]), checked=bool(item.get("checked", False)))
+        Choice(
+            name=str(item["name"]),
+            value=str(item["value"]),
+            checked=bool(item.get("checked", False)),
+            detail=str(item.get("detail", "")),
+        )
         for item in raw_choices
     ]
     return SearchableMultiSelect(title=title, choices=choices, required=required).run()

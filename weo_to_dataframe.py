@@ -15,9 +15,16 @@ def main() -> None:
     if len(sys.argv) == 1:
         settings.interactive = True
 
-    client = ImfWeoClient()
-    dataframe = run_dataframe(settings, client)
-    release = client.fetch_catalog().release
+    try:
+        client = ImfWeoClient()
+        dataframe = run_dataframe(settings, client)
+        release = client.fetch_catalog().release
+    except KeyboardInterrupt:
+        print("Selection cancelled.", file=sys.stderr)
+        raise SystemExit(130) from None
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1) from None
 
     if settings.output_path:
         output_path = save_dataframe(dataframe, settings.output_path)

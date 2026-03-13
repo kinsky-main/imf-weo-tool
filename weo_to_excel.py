@@ -15,9 +15,16 @@ def main() -> None:
     if len(sys.argv) == 1:
         settings.interactive = True
 
-    client = ImfWeoClient()
-    output_path = run_excel_export(settings, client)
-    release = client.fetch_catalog().release
+    try:
+        client = ImfWeoClient()
+        output_path = run_excel_export(settings, client)
+        release = client.fetch_catalog().release
+    except KeyboardInterrupt:
+        print("Selection cancelled.", file=sys.stderr)
+        raise SystemExit(130) from None
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(1) from None
 
     print(f"Saved Excel workbook to {output_path}")
     print(f"WEO release: {release.version} (updated {release.updated_at})")

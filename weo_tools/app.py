@@ -7,7 +7,7 @@ from typing import Any
 import pandas as pd
 
 from .configuration import RuntimeSettings
-from .imf import Catalog, ImfWeoClient
+from .imf import AvailabilityAggregate, AvailabilityResult, Catalog, ImfWeoClient
 from .legacy import AliasConfig, LegacyCatalog, load_alias_config, load_legacy_catalog, normalize_label
 from .tui import prompt_for_choice, prompt_for_choices, run_with_status
 
@@ -105,7 +105,7 @@ def run_excel_export(settings: RuntimeSettings, client: ImfWeoClient | None = No
     dataframe = run_dataframe(settings, client)
     output_path = Path(settings.output_path or "output/weo_export.xlsx")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    wide = pivot_for_excel(dataframe)
+    wide = _normalize_excel_numeric_frame(pivot_for_excel(dataframe))
     with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
         wide.to_excel(writer, sheet_name="WEO Data", index=False)
     return output_path
@@ -122,7 +122,7 @@ def save_dataframe(dataframe: pd.DataFrame, output_path: str | Path) -> Path:
     elif suffix in {".pkl", ".pickle"}:
         dataframe.to_pickle(path)
     elif suffix == ".xlsx":
-        dataframe.to_excel(path, index=False)
+        _normalize_excel_numeric_frame(dataframe).to_excel(path, index=False)
     else:
         raise ValueError(f"Unsupported dataframe output format: {path.suffix}")
     return path
@@ -238,33 +238,69 @@ def _resolve_country_first_selection(
     selected_subjects: list[str],
 ) -> CoreSelectionState:
     if settings.interactive and not selected_countries:
-        selected_countries = _prompt_for_country_codes(
+        available_location_codes = _fetch_available_location_codes(client, settings.frequency)
+        available_country_codes, available_group_codes = _split_available_location_codes(
+            catalog,
+            available_location_codes,
+        )
+        country_totals = _fetch_indicator_availability(
+            client,
+            available_country_codes,
+            settings.frequency,
+            strict=False,
+            status_message="Checking country availability...",
+        )
+        selected_country_codes = _prompt_for_country_codes(
             "Select countries",
             catalog,
             legacy,
+            available_country_codes=available_country_codes,
+            detail_by_code=_build_total_count_details(country_totals.results, "indicator"),
+            required=False,
         )
+        group_totals = _fetch_indicator_availability(
+            client,
+            available_group_codes,
+            settings.frequency,
+            strict=False,
+            status_message="Checking country group availability...",
+        )
+        selected_group_codes = _prompt_for_country_group_codes(
+            "Select country groups",
+            catalog,
+            legacy,
+            available_group_codes=available_group_codes,
+            detail_by_code=_build_total_count_details(group_totals.results, "indicator"),
+            required=False,
+        )
+        selected_countries = selected_country_codes + selected_group_codes
     if not selected_countries:
-        raise ValueError("At least one country selector is required.")
+        raise ValueError("At least one country or country group selector is required.")
 
     country_codes = _resolve_country_codes(selected_countries, catalog, legacy, aliases)
-    available_indicator_codes = _fetch_available_indicator_codes(client, country_codes, settings.frequency)
-    if not available_indicator_codes:
-        raise ValueError("No indicators are available for the selected countries and frequency.")
+    indicator_availability = _fetch_indicator_availability(client, country_codes, settings.frequency)
+    if not indicator_availability.available_codes:
+        raise ValueError("No indicators are available for the selected countries or country groups and frequency.")
 
     if settings.interactive and not selected_subjects:
         selected_subjects = _prompt_for_indicator_codes(
             "Select subject descriptors",
-            available_indicator_codes,
+            indicator_availability.available_codes,
             catalog,
             legacy,
+            detail_by_code=_build_ratio_count_details(
+                indicator_availability.counts_by_code,
+                len(country_codes),
+                "location",
+            ),
         )
     if not selected_subjects:
         raise ValueError("At least one subject descriptor selector is required.")
 
     indicator_codes = _resolve_indicator_codes(selected_subjects, catalog, legacy, aliases)
-    indicator_codes = _restrict_codes(indicator_codes, available_indicator_codes)
+    indicator_codes = _restrict_codes(indicator_codes, indicator_availability.available_codes)
     if not indicator_codes:
-        raise ValueError("No matching indicators are available for the selected countries.")
+        raise ValueError("No matching indicators are available for the selected countries or country groups.")
 
     return CoreSelectionState(country_codes=country_codes, indicator_codes=indicator_codes)
 
@@ -280,34 +316,66 @@ def _resolve_indicator_first_selection(
     selected_subjects: list[str],
 ) -> CoreSelectionState:
     if settings.interactive and not selected_subjects:
+        available_indicator_codes = _fetch_available_indicator_catalog_codes(client, settings.frequency)
+        indicator_totals = _fetch_country_availability(
+            client,
+            available_indicator_codes,
+            settings.frequency,
+            strict=False,
+            status_message="Checking subject availability...",
+        )
         selected_subjects = _prompt_for_indicator_codes(
             "Select subject descriptors",
-            list(catalog.indicators.keys()),
+            available_indicator_codes,
             catalog,
             legacy,
+            detail_by_code=_build_total_count_details(indicator_totals.results, "location"),
         )
     if not selected_subjects:
         raise ValueError("At least one subject descriptor selector is required.")
 
     indicator_codes = _resolve_indicator_codes(selected_subjects, catalog, legacy, aliases)
-    available_country_codes = _fetch_available_country_codes(client, indicator_codes, settings.frequency)
-    if not available_country_codes:
-        raise ValueError("No countries are available for the selected subject descriptors and frequency.")
+    country_availability = _fetch_country_availability(client, indicator_codes, settings.frequency)
+    if not country_availability.available_codes:
+        raise ValueError("No countries or country groups are available for the selected subject descriptors and frequency.")
 
     if settings.interactive and not selected_countries:
-        selected_countries = _prompt_for_country_codes(
+        available_country_codes, available_group_codes = _split_available_location_codes(
+            catalog,
+            country_availability.available_codes,
+        )
+        selected_country_codes = _prompt_for_country_codes(
             "Select countries",
             catalog,
             legacy,
             available_country_codes=available_country_codes,
+            detail_by_code=_build_ratio_count_details(
+                _filter_count_map(country_availability.counts_by_code, available_country_codes),
+                len(indicator_codes),
+                "subject",
+            ),
+            required=False,
         )
+        selected_group_codes = _prompt_for_country_group_codes(
+            "Select country groups",
+            catalog,
+            legacy,
+            available_group_codes=available_group_codes,
+            detail_by_code=_build_ratio_count_details(
+                _filter_count_map(country_availability.counts_by_code, available_group_codes),
+                len(indicator_codes),
+                "subject",
+            ),
+            required=False,
+        )
+        selected_countries = selected_country_codes + selected_group_codes
     if not selected_countries:
-        raise ValueError("At least one country selector is required.")
+        raise ValueError("At least one country or country group selector is required.")
 
     country_codes = _resolve_country_codes(selected_countries, catalog, legacy, aliases)
-    country_codes = _restrict_codes(country_codes, available_country_codes)
+    country_codes = _restrict_codes(country_codes, country_availability.available_codes)
     if not country_codes:
-        raise ValueError("No matching countries are available for the selected subject descriptors.")
+        raise ValueError("No matching countries or country groups are available for the selected subject descriptors.")
 
     return CoreSelectionState(country_codes=country_codes, indicator_codes=indicator_codes)
 
@@ -378,9 +446,7 @@ def _build_resolved_selections(
         manual_aliases=aliases.scales,
         entity_name="scale",
     )
-    country_labels = {
-        code: legacy.preferred_country_labels.get(code, catalog.countries[code]) for code in country_codes
-    }
+    country_labels = {code: legacy.preferred_country_labels.get(code, catalog.locations[code]) for code in country_codes}
     subject_labels = {
         code: legacy.preferred_subject_labels.get(code, catalog.indicators[code]) for code in indicator_codes
     }
@@ -407,20 +473,52 @@ def _build_resolved_selections(
     )
 
 
-def _fetch_available_indicator_codes(client: ImfWeoClient, country_codes: list[str], frequency: str) -> list[str]:
+def _fetch_indicator_availability(
+    client: ImfWeoClient,
+    country_codes: list[str],
+    frequency: str,
+    *,
+    strict: bool = True,
+    status_message: str = "Checking available indicators...",
+) -> AvailabilityAggregate:
     return run_with_status(
-        "Checking available indicators...",
-        client.fetch_available_indicator_codes,
-        country_codes=country_codes,
+        status_message,
+        client.fetch_indicator_availability,
+        values=country_codes,
+        frequency=frequency,
+        strict=strict,
+    )
+
+
+def _fetch_country_availability(
+    client: ImfWeoClient,
+    indicator_codes: list[str],
+    frequency: str,
+    *,
+    strict: bool = True,
+    status_message: str = "Checking available countries...",
+) -> AvailabilityAggregate:
+    return run_with_status(
+        status_message,
+        client.fetch_country_availability,
+        values=indicator_codes,
+        frequency=frequency,
+        strict=strict,
+    )
+
+
+def _fetch_available_location_codes(client: ImfWeoClient, frequency: str) -> list[str]:
+    return run_with_status(
+        "Checking available locations...",
+        client.fetch_available_location_codes,
         frequency=frequency,
     )
 
 
-def _fetch_available_country_codes(client: ImfWeoClient, indicator_codes: list[str], frequency: str) -> list[str]:
+def _fetch_available_indicator_catalog_codes(client: ImfWeoClient, frequency: str) -> list[str]:
     return run_with_status(
-        "Checking available countries...",
-        client.fetch_available_country_codes,
-        indicator_codes=indicator_codes,
+        "Checking available subjects...",
+        client.fetch_available_indicator_catalog_codes,
         frequency=frequency,
     )
 
@@ -433,7 +531,7 @@ def _resolve_country_codes(
 ) -> list[str]:
     return _resolve_codes(
         requested=requested,
-        current_labels=catalog.countries,
+        current_labels=catalog.locations,
         preferred_labels=legacy.preferred_country_labels,
         workbook_aliases=legacy.country_aliases,
         manual_aliases=aliases.countries,
@@ -463,9 +561,49 @@ def _prompt_for_country_codes(
     catalog: Catalog,
     legacy: LegacyCatalog,
     available_country_codes: list[str] | None = None,
+    detail_by_code: dict[str, str] | None = None,
+    required: bool = True,
 ) -> list[str]:
     codes = available_country_codes or list(catalog.countries.keys())
-    return _prompt_for_codes(prompt, _build_choice_map_for_codes(codes, catalog.countries, legacy.preferred_country_labels))
+    return _prompt_for_codes(
+        prompt,
+        _build_choice_map_for_codes(
+            codes,
+            catalog.countries,
+            legacy.preferred_country_labels,
+            detail_by_code=detail_by_code,
+        ),
+        required=required,
+    )
+
+
+def _prompt_for_country_group_codes(
+    prompt: str,
+    catalog: Catalog,
+    legacy: LegacyCatalog,
+    available_group_codes: list[str] | None = None,
+    detail_by_code: dict[str, str] | None = None,
+    required: bool = True,
+) -> list[str]:
+    codes = available_group_codes or list(catalog.country_groups.keys())
+    return _prompt_for_codes(
+        prompt,
+        _build_choice_map_for_codes(
+            codes,
+            catalog.country_groups,
+            legacy.preferred_country_labels,
+            detail_by_code=detail_by_code,
+        ),
+        required=required,
+    )
+
+
+def _split_available_location_codes(catalog: Catalog, available_location_codes: list[str]) -> tuple[list[str], list[str]]:
+    available = set(available_location_codes)
+    return (
+        [code for code in catalog.countries if code in available],
+        [code for code in catalog.country_groups if code in available],
+    )
 
 
 def _prompt_for_indicator_codes(
@@ -473,11 +611,20 @@ def _prompt_for_indicator_codes(
     available_indicator_codes: list[str],
     catalog: Catalog,
     legacy: LegacyCatalog,
+    detail_by_code: dict[str, str] | None = None,
 ) -> list[str]:
     preferred_labels = {
         code: legacy.preferred_subject_labels.get(code, catalog.indicators[code]) for code in available_indicator_codes
     }
-    return _prompt_for_codes(prompt, _build_choice_map_for_codes(available_indicator_codes, catalog.indicators, preferred_labels))
+    return _prompt_for_codes(
+        prompt,
+        _build_choice_map_for_codes(
+            available_indicator_codes,
+            catalog.indicators,
+            preferred_labels,
+            detail_by_code=detail_by_code,
+        ),
+    )
 
 
 def _restrict_codes(resolved_codes: list[str], available_codes: list[str]) -> list[str]:
@@ -578,15 +725,22 @@ def _build_choice_map_for_codes(
     current_labels: dict[str, str],
     preferred_labels: dict[str, str],
     preselected: list[str] | None = None,
+    detail_by_code: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     subset = {code: current_labels[code] for code in codes}
-    return _build_choice_map(subset, preferred_labels, preselected=preselected)
+    return _build_choice_map(
+        subset,
+        preferred_labels,
+        preselected=preselected,
+        detail_by_code=detail_by_code,
+    )
 
 
 def _build_choice_map(
     current_labels: dict[str, str],
     preferred_labels: dict[str, str],
     preselected: list[str] | None = None,
+    detail_by_code: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     choices: list[dict[str, Any]] = []
     for code, current_label in sorted(current_labels.items(), key=lambda item: preferred_labels.get(item[0], item[1])):
@@ -595,6 +749,8 @@ def _build_choice_map(
         if preferred != current_label:
             title = f"{title} ({current_label})"
         choice: dict[str, Any] = {"name": title, "value": code}
+        if detail_by_code and code in detail_by_code:
+            choice["detail"] = detail_by_code[code]
         if preselected and code in preselected:
             choice["checked"] = True
         choices.append(choice)
@@ -656,6 +812,10 @@ def _filter_indicator_codes(
 
 
 def _prompt_for_codes(prompt: str, choices: list[dict[str, Any]], required: bool = True) -> list[str]:
+    if not choices:
+        if required:
+            raise ValueError(f"No choices are available for {prompt.lower()}.")
+        return []
     result = prompt_for_choices(prompt, choices, required=required)
     if required and not result:
         raise ValueError(f"{prompt} requires at least one selection.")
@@ -664,3 +824,65 @@ def _prompt_for_codes(prompt: str, choices: list[dict[str, Any]], required: bool
 
 def _prompt_for_labels(prompt: str, choices: list[dict[str, Any]], required: bool = True) -> list[str]:
     return _prompt_for_codes(prompt, choices, required=required)
+
+
+def _build_total_count_details(results: list[AvailabilityResult], counterpart_name: str) -> dict[str, str]:
+    return {
+        result.requested_code: f"{result.series_count} {_pluralize(counterpart_name, result.series_count)}"
+        for result in results
+    }
+
+
+def _build_ratio_count_details(
+    counts_by_code: dict[str, int],
+    denominator: int,
+    counterpart_name: str,
+) -> dict[str, str]:
+    plural = _pluralize(counterpart_name, denominator)
+    return {
+        code: f"{count}/{denominator} {plural}"
+        for code, count in counts_by_code.items()
+    }
+
+
+def _filter_count_map(counts_by_code: dict[str, int], codes: list[str]) -> dict[str, int]:
+    allowed = set(codes)
+    return {code: count for code, count in counts_by_code.items() if code in allowed}
+
+
+def _pluralize(noun: str, count: int) -> str:
+    if noun.endswith("y") and not noun.endswith(("ay", "ey", "iy", "oy", "uy")):
+        return noun if count == 1 else f"{noun[:-1]}ies"
+    return noun if count == 1 else f"{noun}s"
+
+
+def _normalize_excel_numeric_frame(dataframe: pd.DataFrame) -> pd.DataFrame:
+    normalized = dataframe.copy()
+    for column in normalized.columns:
+        if _should_normalize_excel_column(column, normalized[column]):
+            normalized[column] = _coerce_excel_numeric_series(normalized[column])
+    return normalized
+
+
+def _should_normalize_excel_column(column: Any, series: pd.Series) -> bool:
+    column_name = str(column)
+    if column_name in {"time_period", "obs_value"} or column_name.isdigit():
+        return True
+    if not pd.api.types.is_object_dtype(series.dtype) and not pd.api.types.is_string_dtype(series.dtype):
+        return False
+    non_empty = series.replace("", pd.NA).dropna()
+    if non_empty.empty:
+        return False
+    converted = pd.to_numeric(non_empty, errors="coerce")
+    return bool(converted.notna().all())
+
+
+def _coerce_excel_numeric_series(series: pd.Series) -> pd.Series:
+    cleaned = series.replace("", pd.NA)
+    converted = pd.to_numeric(cleaned, errors="coerce")
+    non_null = converted.dropna()
+    if non_null.empty:
+        return converted
+    if ((non_null % 1) == 0).all():
+        return converted.astype("Int64")
+    return converted.astype("Float64")

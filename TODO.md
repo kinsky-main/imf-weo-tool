@@ -6,4 +6,12 @@
 - [x] Review code to make it more modular and concise.
 - [x] Unit selection should stop interrupting the flow when there is only one effective unit or scale choice.
 - [x] Add an option at the start of the TUI to choose whether to begin selection by country or by indicator.
-- [ ] Numbers are saved as strings in the output excel file, requiring later conversion.
+- [ ] Dates are saved as strings in the output excel file, requiring later conversion.
+- [x] Add country group selection, API should provide this. Then have options to select all / clear all in TUI.
+- [x] Add an explanation of how to use the WEO codes in the Notebook.
+- [ ] Make output files more informative, e.g. include the country and indicator in the filename, make unique.
+- [ ] Add an option to select the frequency of the data (e.g. annual, quarterly, etc.)
+- [ ] Region selection is meant to then show the available countries, not pull data for that region. Allow the user whether they want to select a region and its constituent countries or just select countries directly.
+- [ ] Allow user to click on search bar to select it.
+- [ ] Extend size of selection window to the terminal window size.
+- [ ] Remove pointless options in unit selection, check needs to be made that a series has more than one unit, currently it checks if any series has more than one unit, which is not the same thing.
