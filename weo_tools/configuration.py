@@ -17,11 +17,15 @@ class RuntimeSettings:
     units: list[str] = field(default_factory=list)
     scales: list[str] = field(default_factory=list)
     frequency: str = "A"
+    frequency_explicit: bool = False
     start_year: int | None = None
     end_year: int | None = None
+    start_year_explicit: bool = False
+    end_year_explicit: bool = False
+    start_period_display: str = ""
+    end_period_display: str = ""
     interactive: bool = False
     output_path: str = ""
-    compatibility_workbook: str = "data/weoapr2025all.xlsx"
     alias_file: str = "config/weo_aliases.toml"
 
 
@@ -47,11 +51,13 @@ def load_defaults(path: str | Path = DEFAULT_CONFIG_PATH) -> RuntimeSettings:
         units=_as_list(raw.get("units")),
         scales=_as_list(raw.get("scales")),
         frequency=str(raw.get("frequency", "A")),
+        frequency_explicit=False,
         start_year=raw.get("start_year"),
         end_year=raw.get("end_year"),
+        start_year_explicit=False,
+        end_year_explicit=False,
         interactive=bool(raw.get("interactive", False)),
         output_path=str(raw.get("output_path", "")),
-        compatibility_workbook=str(raw.get("compatibility_workbook", "data/weoapr2025all.xlsx")),
         alias_file=str(raw.get("alias_file", "config/weo_aliases.toml")),
     )
 
@@ -69,14 +75,15 @@ def merge_settings(defaults: RuntimeSettings, args: argparse.Namespace) -> Runti
         merged.scales = list(args.scale)
     if args.frequency:
         merged.frequency = args.frequency
+        merged.frequency_explicit = True
     if args.start_year is not None:
         merged.start_year = args.start_year
+        merged.start_year_explicit = True
     if args.end_year is not None:
         merged.end_year = args.end_year
+        merged.end_year_explicit = True
     if args.output:
         merged.output_path = args.output
-    if args.compatibility_workbook:
-        merged.compatibility_workbook = args.compatibility_workbook
     if args.alias_file:
         merged.alias_file = args.alias_file
     if args.interactive:
@@ -101,6 +108,5 @@ def build_common_parser(description: str) -> argparse.ArgumentParser:
     parser.add_argument("--end-year", type=int, default=None, help="Last year to include.")
     parser.add_argument("--output", default=None, help="Optional output file path.")
     parser.add_argument("--interactive", action="store_true", help="Prompt for missing selectors in a terminal UI.")
-    parser.add_argument("--compatibility-workbook", default=None, help="Legacy WEO workbook used for old labels.")
     parser.add_argument("--alias-file", default=None, help="TOML file with extra label aliases.")
     return parser

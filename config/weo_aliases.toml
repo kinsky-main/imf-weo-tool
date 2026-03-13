@@ -20,6 +20,17 @@
 "millions" = "6"
 "units" = "0"
 
+[countries]
+"austria" = "AUT"
+"united kingdom" = "GBR"
+"world" = "G001"
+"europe" = "U150"
+
+[subjects]
+"gross domestic product, current prices" = ["NGDP", "NGDPD"]
+"inflation, average consumer prices" = "PCPIPCH"
+"population" = "LP"
+
 [unit_display]
 USD = "U.S. dollars"
 XDC = "National currency"

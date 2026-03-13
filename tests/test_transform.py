@@ -7,9 +7,9 @@ from uuid import uuid4
 import pandas as pd
 from openpyxl import load_workbook
 
-from weo_tools.app import enrich_for_legacy_columns, pivot_for_excel, run_excel_export, save_dataframe
+from weo_tools.app import _parse_period_header_to_datetime, enrich_for_legacy_columns, pivot_for_excel, run_excel_export, save_dataframe
 from weo_tools.configuration import RuntimeSettings
-from weo_tools.imf import AvailabilityAggregate, AvailabilityResult, Catalog, ReleaseInfo, _build_dataframe
+from weo_tools.imf import AvailabilityAggregate, AvailabilityResult, Catalog, ReleaseInfo, SeriesVariant, _build_dataframe
 
 
 class ExcelClient:
@@ -65,6 +65,18 @@ class ExcelClient:
             ]
         )
 
+    def fetch_indicator_series_variants(
+        self,
+        country_codes: list[str],
+        indicator_codes: list[str],
+        frequency: str,
+    ) -> dict[str, list[SeriesVariant]]:
+        del country_codes, frequency
+        return {
+            indicator_code: [SeriesVariant(unit_code="USD", scale_code="9")]
+            for indicator_code in indicator_codes
+        }
+
 
 def test_build_dataframe_normalizes_sdmx_response() -> None:
     csv_frame = pd.DataFrame(
@@ -76,6 +88,7 @@ def test_build_dataframe_normalizes_sdmx_response() -> None:
                 "TIME_PERIOD": "2024",
                 "OBS_VALUE": "3644636000000",
                 "SCALE": "9",
+                "UNIT": "USD",
                 "COUNTRY_UPDATE_DATE": "9/13/2025",
             },
             {
@@ -85,6 +98,7 @@ def test_build_dataframe_normalizes_sdmx_response() -> None:
                 "TIME_PERIOD": "2025",
                 "OBS_VALUE": "3958780000000",
                 "SCALE": "9",
+                "UNIT": "USD",
                 "COUNTRY_UPDATE_DATE": "9/13/2025",
             },
         ]
@@ -97,9 +111,6 @@ def test_build_dataframe_normalizes_sdmx_response() -> None:
         subject_labels={"NGDPD": "Gross domestic product, current prices"},
         unit_labels={"USD": "U.S. dollars"},
         scale_labels={"9": "Billions"},
-        indicator_unit_labels={"NGDPD": "U.S. dollars"},
-        indicator_unit_codes={"NGDPD": "USD"},
-        indicator_scale_labels={"NGDPD": "Billions"},
     )
     dataframe = enrich_for_legacy_columns(dataframe)
 
@@ -120,6 +131,7 @@ def test_build_dataframe_leaves_unscaled_series_in_base_units() -> None:
                 "TIME_PERIOD": "2024",
                 "OBS_VALUE": "4.25",
                 "SCALE": "0",
+                "UNIT": "PCH",
                 "COUNTRY_UPDATE_DATE": "9/13/2025",
             },
         ]
@@ -132,9 +144,6 @@ def test_build_dataframe_leaves_unscaled_series_in_base_units() -> None:
         subject_labels={"PCPIPCH": "Inflation, average consumer prices"},
         unit_labels={"PCH": "Percent change"},
         scale_labels={"0": "Units"},
-        indicator_unit_labels={"PCPIPCH": "Percent change"},
-        indicator_unit_codes={"PCPIPCH": "PCH"},
-        indicator_scale_labels={"PCPIPCH": "Units"},
     )
 
     assert dataframe.iloc[0]["obs_value"] == 4.25
@@ -252,6 +261,14 @@ def test_run_excel_export_converts_wide_period_headers_to_excel_dates(monkeypatc
     assert isinstance(sheet["E1"].value, datetime)
     assert sheet["E1"].value.date().isoformat() == "2024-12-31"
     assert sheet["E1"].number_format == "yyyy-mm-dd"
+
+
+def test_parse_period_header_to_datetime_supports_normalized_quarter_and_day_strings() -> None:
+    quarterly = _parse_period_header_to_datetime("Q1 2024", "Q")
+    daily = _parse_period_header_to_datetime("31.03.2024", "D")
+
+    assert quarterly is not None and quarterly.date().isoformat() == "2024-03-31"
+    assert daily is not None and daily.date().isoformat() == "2024-03-31"
 
 
 def test_run_excel_export_generates_informative_unique_filenames(monkeypatch, tmp_path: Path) -> None:

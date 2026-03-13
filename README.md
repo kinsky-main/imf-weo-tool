@@ -42,8 +42,7 @@ The scripts accept the legacy selector fields:
 - `Units`
 - `Scale`
 
-Legacy label compatibility is sourced from `data/weoapr2025all.xlsx` and the
-editable overrides in `config/weo_aliases.toml`.
+Selector aliases are sourced from `config/weo_aliases.toml`.
 
 ## Examples
 

@@ -10,10 +10,25 @@ from typing import Any
 import pandas as pd
 
 from .configuration import RuntimeSettings
-from .imf import AvailabilityAggregate, AvailabilityResult, Catalog, ImfWeoClient
-from .legacy import AliasConfig, LegacyCatalog, load_alias_config, load_legacy_catalog, normalize_label
+from .imf import (
+    AvailabilityAggregate,
+    AvailabilityResult,
+    Catalog,
+    ImfWeoClient,
+    SeriesVariant,
+    TimePeriod,
+    parse_time_period,
+)
+from .legacy import AliasConfig, load_alias_config, normalize_label
 from .regions import DEFAULT_REGION_MEMBERSHIP_PATH, RegionMembership, load_region_membership
-from .tui import interactive_tui_session, prompt_for_choice, prompt_for_choices, run_with_status, set_interactive_summary
+from .tui import (
+    interactive_tui_session,
+    prompt_for_choice,
+    prompt_for_choices,
+    prompt_for_time_range,
+    run_with_status,
+    set_interactive_summary,
+)
 
 
 COUNTRY_FIRST = "country-first"
@@ -30,9 +45,6 @@ class ResolvedSelections:
     subject_labels: dict[str, str]
     unit_labels: dict[str, str]
     scale_labels: dict[str, str]
-    indicator_unit_labels: dict[str, str]
-    indicator_unit_codes: dict[str, str]
-    indicator_scale_labels: dict[str, str]
 
 
 @dataclass(slots=True)
@@ -44,8 +56,16 @@ class CoreSelectionState:
 @dataclass(slots=True)
 class FilterSelectionState:
     indicator_codes: list[str]
-    selected_units: list[str]
-    selected_scales: list[str]
+    selected_unit_codes: list[str]
+    selected_scale_codes: list[str]
+
+
+@dataclass(slots=True)
+class ResolvedTimeRange:
+    start_year: int | None
+    end_year: int | None
+    start_period: TimePeriod | None = None
+    end_period: TimePeriod | None = None
 
 
 def load_weo_dataframe(
@@ -57,7 +77,6 @@ def load_weo_dataframe(
     frequency: str = "A",
     start_year: int | None = None,
     end_year: int | None = None,
-    compatibility_workbook: str = "data/weoapr2025all.xlsx",
     alias_file: str = "config/weo_aliases.toml",
     interactive: bool = False,
 ) -> pd.DataFrame:
@@ -67,9 +86,11 @@ def load_weo_dataframe(
         units=list(units or []),
         scales=list(scales or []),
         frequency=frequency,
+        frequency_explicit=False if interactive and str(frequency).strip().upper() == "A" else bool(str(frequency).strip()),
         start_year=start_year,
         end_year=end_year,
-        compatibility_workbook=compatibility_workbook,
+        start_year_explicit=start_year is not None,
+        end_year_explicit=end_year is not None,
         alias_file=alias_file,
         interactive=interactive,
     )
@@ -88,30 +109,82 @@ def _run_dataframe(settings: RuntimeSettings, client: ImfWeoClient | None = None
     active_client = client or ImfWeoClient()
     catalog = run_with_status("Loading IMF WEO catalog...", active_client.fetch_catalog)
     region_membership = _load_region_membership(catalog)
-    frequency = _resolve_frequency_code(settings, catalog, active_client)
-    settings.frequency = frequency
-    _update_interactive_summary(settings)
     aliases = load_alias_config(settings.alias_file)
-    legacy = load_legacy_catalog(settings.compatibility_workbook)
-    selections = _resolve_selections(
-        settings,
-        catalog,
-        legacy,
-        aliases,
-        region_membership,
-        active_client,
-        frequency,
-    )
+    if settings.interactive and not settings.frequency_explicit:
+        settings.frequency = ""
+    if settings.interactive and not settings.start_year_explicit:
+        settings.start_year = None
+    if settings.interactive and not settings.end_year_explicit:
+        settings.end_year = None
+    settings.start_period_display = ""
+    settings.end_period_display = ""
+
+    if settings.interactive:
+        selection_frequency = _primary_selection_frequency(settings)
+        core_state = _resolve_primary_selection_state(
+            settings,
+            catalog,
+            aliases,
+            region_membership,
+            active_client,
+            selection_frequency,
+        )
+        _update_interactive_summary(
+            settings,
+            country_codes=core_state.country_codes,
+            indicator_codes=core_state.indicator_codes,
+        )
+        frequency = _resolve_frequency_code(
+            settings,
+            catalog,
+            active_client,
+            country_codes=core_state.country_codes,
+            indicator_codes=core_state.indicator_codes,
+        )
+        settings.frequency = frequency
+        selections = _build_resolved_selections_for_core_state(
+            settings,
+            core_state,
+            catalog,
+            aliases,
+            active_client,
+            frequency,
+        )
+    else:
+        scoped_country_codes, scoped_indicator_codes = _resolve_requested_scope_for_frequency_validation(
+            settings,
+            catalog,
+            aliases,
+            region_membership,
+        )
+        frequency = _resolve_frequency_code(
+            settings,
+            catalog,
+            active_client,
+            country_codes=scoped_country_codes,
+            indicator_codes=scoped_indicator_codes,
+        )
+        settings.frequency = frequency
+        selections = _resolve_selections(
+            settings,
+            catalog,
+            aliases,
+            region_membership,
+            active_client,
+            frequency,
+        )
     _update_interactive_summary(settings, selections=selections)
-    start_year, end_year = _resolve_date_range(
+    time_range = _resolve_time_range(
         settings,
         active_client,
         selections.country_codes,
         selections.indicator_codes,
         frequency,
     )
-    settings.start_year = start_year
-    settings.end_year = end_year
+    settings.start_year = time_range.start_year
+    settings.end_year = time_range.end_year
+    settings.start_period_display = _display_time_period_text(time_range.start_period)
+    settings.end_period_display = _display_time_period_text(time_range.end_period)
     _update_interactive_summary(settings, selections=selections)
 
     dataframe = run_with_status(
@@ -122,15 +195,14 @@ def _run_dataframe(settings: RuntimeSettings, client: ImfWeoClient | None = None
         unit_codes=selections.unit_codes,
         scale_codes=selections.scale_codes,
         frequency=frequency,
-        start_year=start_year,
-        end_year=end_year,
+        start_year=time_range.start_year,
+        end_year=time_range.end_year,
         subject_labels=selections.subject_labels,
         country_labels=selections.country_labels,
         unit_labels=selections.unit_labels,
         scale_labels=selections.scale_labels,
-        indicator_unit_labels=selections.indicator_unit_labels,
-        indicator_unit_codes=selections.indicator_unit_codes,
-        indicator_scale_labels=selections.indicator_scale_labels,
+        start_period=time_range.start_period,
+        end_period=time_range.end_period,
     )
     return enrich_for_legacy_columns(dataframe)
 
@@ -196,7 +268,6 @@ def pivot_for_excel(dataframe: pd.DataFrame) -> pd.DataFrame:
 def _resolve_selections(
     settings: RuntimeSettings,
     catalog: Catalog,
-    legacy: LegacyCatalog,
     aliases: AliasConfig,
     region_membership: RegionMembership,
     client: ImfWeoClient,
@@ -205,19 +276,53 @@ def _resolve_selections(
     core_state = _resolve_primary_selection_state(
         settings,
         catalog,
-        legacy,
         aliases,
         region_membership,
         client,
         frequency,
     )
-    filter_state = _resolve_unit_scale_filters(settings, core_state.indicator_codes, legacy)
+    filter_state = _resolve_unit_scale_filters(
+        settings,
+        country_codes=core_state.country_codes,
+        indicator_codes=core_state.indicator_codes,
+        catalog=catalog,
+        aliases=aliases,
+        client=client,
+        frequency=frequency,
+    )
     return _build_resolved_selections(
         country_codes=core_state.country_codes,
         indicator_codes=filter_state.indicator_codes,
-        selected_scales=filter_state.selected_scales,
+        selected_unit_codes=filter_state.selected_unit_codes,
+        selected_scale_codes=filter_state.selected_scale_codes,
         catalog=catalog,
-        legacy=legacy,
+        aliases=aliases,
+    )
+
+
+def _build_resolved_selections_for_core_state(
+    settings: RuntimeSettings,
+    core_state: CoreSelectionState,
+    catalog: Catalog,
+    aliases: AliasConfig,
+    client: ImfWeoClient,
+    frequency: str,
+) -> ResolvedSelections:
+    filter_state = _resolve_unit_scale_filters(
+        settings,
+        country_codes=core_state.country_codes,
+        indicator_codes=core_state.indicator_codes,
+        catalog=catalog,
+        aliases=aliases,
+        client=client,
+        frequency=frequency,
+    )
+    return _build_resolved_selections(
+        country_codes=core_state.country_codes,
+        indicator_codes=filter_state.indicator_codes,
+        selected_unit_codes=filter_state.selected_unit_codes,
+        selected_scale_codes=filter_state.selected_scale_codes,
+        catalog=catalog,
         aliases=aliases,
     )
 
@@ -225,7 +330,6 @@ def _resolve_selections(
 def _resolve_primary_selection_state(
     settings: RuntimeSettings,
     catalog: Catalog,
-    legacy: LegacyCatalog,
     aliases: AliasConfig,
     region_membership: RegionMembership,
     client: ImfWeoClient,
@@ -241,7 +345,6 @@ def _resolve_primary_selection_state(
         return _resolve_indicator_first_selection(
             settings,
             catalog,
-            legacy,
             aliases,
             region_membership,
             client,
@@ -252,7 +355,6 @@ def _resolve_primary_selection_state(
     return _resolve_country_first_selection(
         settings,
         catalog,
-        legacy,
         aliases,
         region_membership,
         client,
@@ -290,17 +392,37 @@ def _load_region_membership(catalog: Catalog) -> RegionMembership:
     )
 
 
-def _resolve_frequency_code(settings: RuntimeSettings, catalog: Catalog, client: ImfWeoClient) -> str:
-    available_frequency_codes = _fetch_available_frequency_codes(client)
+def _resolve_frequency_code(
+    settings: RuntimeSettings,
+    catalog: Catalog,
+    client: ImfWeoClient,
+    country_codes: list[str] | None = None,
+    indicator_codes: list[str] | None = None,
+) -> str:
+    scoped_lookup = bool(country_codes and indicator_codes)
+    available_frequency_codes = (
+        _fetch_available_frequency_codes_for_scope(client, country_codes or [], indicator_codes or [])
+        if scoped_lookup
+        else _fetch_available_frequency_codes(client)
+    )
     if not available_frequency_codes:
+        if scoped_lookup:
+            raise ValueError("No frequencies are available for the selected countries and subject descriptors.")
         raise ValueError("No frequencies are available for IMF WEO.")
 
     requested_frequency = str(settings.frequency or "").strip().upper()
     if requested_frequency:
         if requested_frequency not in available_frequency_codes:
+            global_available_frequency_codes = _fetch_available_frequency_codes(client)
+            if requested_frequency not in global_available_frequency_codes:
+                available = ", ".join(global_available_frequency_codes)
+                raise ValueError(
+                    f"Frequency '{requested_frequency}' is not available for IMF WEO. "
+                    f"Available frequencies: {available}."
+                )
             available = ", ".join(available_frequency_codes)
             raise ValueError(
-                f"Frequency '{requested_frequency}' is not available for IMF WEO. "
+                f"Frequency '{requested_frequency}' is not available for the selected countries and subject descriptors. "
                 f"Available frequencies: {available}."
             )
         return requested_frequency
@@ -308,6 +430,13 @@ def _resolve_frequency_code(settings: RuntimeSettings, catalog: Catalog, client:
     if settings.interactive:
         return _prompt_for_frequency(catalog, available_frequency_codes)
     return available_frequency_codes[0]
+
+
+def _primary_selection_frequency(settings: RuntimeSettings) -> str:
+    requested_frequency = str(settings.frequency or "").strip().upper()
+    if settings.frequency_explicit and requested_frequency:
+        return requested_frequency
+    return "*"
 
 
 def _prompt_for_frequency(catalog: Catalog, available_frequency_codes: list[str]) -> str:
@@ -325,10 +454,25 @@ def _prompt_for_frequency(catalog: Catalog, available_frequency_codes: list[str]
     )
 
 
+def _resolve_requested_scope_for_frequency_validation(
+    settings: RuntimeSettings,
+    catalog: Catalog,
+    aliases: AliasConfig,
+    region_membership: RegionMembership,
+) -> tuple[list[str] | None, list[str] | None]:
+    if not settings.countries or not settings.subject_descriptors:
+        return None, None
+    country_codes = _resolve_country_codes(settings.countries, catalog, aliases, region_membership)
+    indicator_codes = _resolve_indicator_codes(settings.subject_descriptors, catalog, aliases)
+    return country_codes, indicator_codes
+
+
 def _update_interactive_summary(
     settings: RuntimeSettings,
     *,
     selections: ResolvedSelections | None = None,
+    country_codes: list[str] | None = None,
+    indicator_codes: list[str] | None = None,
 ) -> None:
     if not settings.interactive:
         return
@@ -336,14 +480,82 @@ def _update_interactive_summary(
     lines: list[str] = []
     if settings.frequency:
         lines.append(f"Frequency: {settings.frequency}")
+    selected_country_codes = selections.country_codes if selections is not None else list(country_codes or [])
+    selected_indicator_codes = selections.indicator_codes if selections is not None else list(indicator_codes or [])
+    if selected_country_codes:
+        lines.append(f"Countries: {len(selected_country_codes)} selected")
+    if selected_indicator_codes:
+        lines.append(f"Subjects: {len(selected_indicator_codes)} selected")
     if selections is not None:
-        lines.append(f"Countries: {len(selections.country_codes)} selected")
-        lines.append(f"Subjects: {len(selections.indicator_codes)} selected")
-        if settings.start_year is not None or settings.end_year is not None:
+        if settings.start_period_display or settings.end_period_display:
+            start = settings.start_period_display or "min"
+            end = settings.end_period_display or "max"
+            lines.append(f"Date range: {start} to {end}")
+        elif settings.start_year is not None or settings.end_year is not None:
             start = settings.start_year if settings.start_year is not None else "min"
             end = settings.end_year if settings.end_year is not None else "max"
             lines.append(f"Date range: {start} to {end}")
     set_interactive_summary(lines)
+
+
+def _resolve_time_range(
+    settings: RuntimeSettings,
+    client: ImfWeoClient,
+    country_codes: list[str],
+    indicator_codes: list[str],
+    frequency: str,
+) -> ResolvedTimeRange:
+    start_year = settings.start_year if settings.start_year_explicit or not settings.interactive else None
+    end_year = settings.end_year if settings.end_year_explicit or not settings.interactive else None
+
+    if settings.start_year_explicit and settings.end_year_explicit and start_year is not None and end_year is not None:
+        _validate_date_range(start_year, end_year)
+        return ResolvedTimeRange(start_year=start_year, end_year=end_year)
+
+    if not settings.interactive:
+        if start_year is not None and end_year is not None:
+            _validate_date_range(start_year, end_year)
+        return ResolvedTimeRange(start_year=start_year, end_year=end_year)
+
+    available_periods = _fetch_available_time_periods(client, country_codes, indicator_codes, frequency)
+    if not available_periods:
+        if start_year is not None and end_year is not None:
+            _validate_date_range(start_year, end_year)
+        return ResolvedTimeRange(start_year=start_year, end_year=end_year)
+
+    constrained_periods = _constrain_time_periods_by_years(available_periods, start_year, end_year)
+    if constrained_periods:
+        available_periods = constrained_periods
+
+    if len(available_periods) == 1 and start_year is None and end_year is None:
+        only_period = available_periods[0]
+        return ResolvedTimeRange(
+            start_year=only_period.start_date.year if only_period.start_date is not None else None,
+            end_year=only_period.end_date.year if only_period.end_date is not None else None,
+            start_period=only_period,
+            end_period=only_period,
+        )
+
+    if settings.start_year_explicit and settings.end_year_explicit and start_year is not None and end_year is not None:
+        _validate_date_range(start_year, end_year)
+        return ResolvedTimeRange(start_year=start_year, end_year=end_year)
+
+    default_start_period = available_periods[0]
+    default_end_period = available_periods[-1]
+    start_period, end_period = _prompt_for_time_period_range(
+        frequency,
+        available_periods,
+        default_start=default_start_period.display_text,
+        default_end=default_end_period.display_text,
+    )
+    if start_period.start_date is not None and end_period.end_date is not None:
+        _validate_date_range(start_period.start_date.year, end_period.end_date.year)
+    return ResolvedTimeRange(
+        start_year=start_period.start_date.year if start_period.start_date is not None else None,
+        end_year=end_period.end_date.year if end_period.end_date is not None else None,
+        start_period=start_period,
+        end_period=end_period,
+    )
 
 
 def _resolve_date_range(
@@ -353,39 +565,8 @@ def _resolve_date_range(
     indicator_codes: list[str],
     frequency: str,
 ) -> tuple[int | None, int | None]:
-    start_year = settings.start_year
-    end_year = settings.end_year
-
-    if start_year is not None and end_year is not None:
-        _validate_date_range(start_year, end_year)
-        return start_year, end_year
-
-    if not settings.interactive:
-        if start_year is not None and end_year is not None:
-            _validate_date_range(start_year, end_year)
-        return start_year, end_year
-
-    available_years = _fetch_available_time_periods(client, country_codes, indicator_codes, frequency)
-    if not available_years:
-        if start_year is not None and end_year is not None:
-            _validate_date_range(start_year, end_year)
-        return start_year, end_year
-
-    if start_year is None and end_year is None and len(available_years) == 1:
-        year = available_years[0]
-        return year, year
-
-    if start_year is None:
-        start_choices = [year for year in available_years if end_year is None or year <= end_year]
-        start_year = _prompt_for_year("Select start year", start_choices)
-
-    if end_year is None:
-        end_choices = [year for year in available_years if year >= start_year]
-        end_year = _prompt_for_year("Select end year", end_choices)
-
-    if start_year is not None and end_year is not None:
-        _validate_date_range(start_year, end_year)
-    return start_year, end_year
+    resolved = _resolve_time_range(settings, client, country_codes, indicator_codes, frequency)
+    return resolved.start_year, resolved.end_year
 
 
 def _validate_date_range(start_year: int, end_year: int) -> None:
@@ -393,23 +574,104 @@ def _validate_date_range(start_year: int, end_year: int) -> None:
         raise ValueError(f"Start year {start_year} cannot be later than end year {end_year}.")
 
 
-def _prompt_for_year(title: str, years: list[int]) -> int:
-    if not years:
-        raise ValueError(f"No years are available for {title.lower()}.")
-    if len(years) == 1:
-        return years[0]
-    return int(
-        prompt_for_choice(
-            title,
-            [{"name": str(year), "value": str(year)} for year in years],
-        )
+def _display_time_period_text(period: TimePeriod | None) -> str:
+    if period is None:
+        return ""
+    return period.display_text
+
+
+def _time_period_placeholder(frequency: str) -> str:
+    normalized_frequency = str(frequency or "").strip().upper()
+    if normalized_frequency == "Q":
+        return "Q1 2024"
+    if normalized_frequency == "M":
+        return "03.2024"
+    if normalized_frequency == "D":
+        return "31.12.2024"
+    return "2024"
+
+
+def _time_period_caption(frequency: str) -> str:
+    normalized_frequency = str(frequency or "").strip().upper()
+    if normalized_frequency == "Q":
+        return "Enter a quarter like Q1 2024."
+    if normalized_frequency == "M":
+        return "Enter a month like 03.2024."
+    if normalized_frequency == "D":
+        return "Enter a day like 31.12.2024."
+    return "Enter a year like 2024."
+
+
+def _prompt_for_time_period_range(
+    frequency: str,
+    available_periods: list[TimePeriod],
+    *,
+    default_start: str,
+    default_end: str,
+) -> tuple[TimePeriod, TimePeriod]:
+    if not available_periods:
+        raise ValueError("No time periods are available for the selected series.")
+    if len(available_periods) == 1:
+        return available_periods[0], available_periods[0]
+
+    available_by_sort_key = {period.sort_key: period for period in available_periods}
+
+    def validate(start_text: str, end_text: str) -> tuple[str, str]:
+        start_period = _resolve_prompt_time_period(start_text, frequency, available_by_sort_key)
+        end_period = _resolve_prompt_time_period(end_text, frequency, available_by_sort_key)
+        if start_period.sort_key > end_period.sort_key:
+            raise ValueError(
+                f"Start {start_period.display_text} cannot be later than end {end_period.display_text}."
+            )
+        return start_period.display_text, end_period.display_text
+
+    start_text, end_text = prompt_for_time_range(
+        title="Select time range",
+        start_value=default_start,
+        end_value=default_end,
+        start_placeholder=_time_period_placeholder(frequency),
+        end_placeholder=_time_period_placeholder(frequency),
+        caption=_time_period_caption(frequency),
+        validate=validate,
     )
+    return (
+        _resolve_prompt_time_period(start_text, frequency, available_by_sort_key),
+        _resolve_prompt_time_period(end_text, frequency, available_by_sort_key),
+    )
+
+
+def _resolve_prompt_time_period(
+    text: str,
+    frequency: str,
+    available_by_sort_key: dict[str, TimePeriod],
+) -> TimePeriod:
+    parsed = parse_time_period(text, frequency)
+    if parsed is None:
+        raise ValueError(f"Invalid {str(frequency or '').strip().upper() or 'time'} period: {text}")
+    matched = available_by_sort_key.get(parsed.sort_key)
+    if matched is None:
+        raise ValueError(f"{parsed.display_text} is not available for the selected series.")
+    return matched
+
+
+def _constrain_time_periods_by_years(
+    available_periods: list[TimePeriod],
+    start_year: int | None,
+    end_year: int | None,
+) -> list[TimePeriod]:
+    constrained: list[TimePeriod] = []
+    for period in available_periods:
+        if start_year is not None and period.end_date is not None and period.end_date.year < start_year:
+            continue
+        if end_year is not None and period.start_date is not None and period.start_date.year > end_year:
+            continue
+        constrained.append(period)
+    return constrained
 
 
 def _resolve_country_first_selection(
     settings: RuntimeSettings,
     catalog: Catalog,
-    legacy: LegacyCatalog,
     aliases: AliasConfig,
     region_membership: RegionMembership,
     client: ImfWeoClient,
@@ -443,7 +705,6 @@ def _resolve_country_first_selection(
         selected_country_codes = _prompt_for_country_codes(
             "Select countries",
             catalog,
-            legacy,
             available_country_codes=available_country_codes,
             detail_by_code=_build_total_count_details(country_totals.results, "indicator"),
             preselected=preselected_country_codes,
@@ -453,17 +714,22 @@ def _resolve_country_first_selection(
     if not selected_countries:
         raise ValueError("At least one country or region selector is required.")
 
-    country_codes = _resolve_country_codes(selected_countries, catalog, legacy, aliases, region_membership)
+    country_codes = _resolve_country_codes(selected_countries, catalog, aliases, region_membership)
     indicator_availability = _fetch_indicator_availability(client, country_codes, frequency)
     if not indicator_availability.available_codes:
         raise ValueError("No indicators are available for the selected countries and frequency.")
 
     if settings.interactive and not selected_subjects:
+        indicator_frequency_codes = _fetch_indicator_frequency_details(
+            client,
+            indicator_availability.available_codes,
+            country_codes=country_codes,
+        )
         prompted_indicator_codes = _prompt_for_indicator_codes(
             "Select subject descriptors",
             indicator_availability.available_codes,
             catalog,
-            legacy,
+            frequency_by_code=_format_indicator_frequency_meta(catalog, indicator_frequency_codes),
             detail_by_code=_build_ratio_count_details(
                 indicator_availability.counts_by_code,
                 len(country_codes),
@@ -477,7 +743,6 @@ def _resolve_country_first_selection(
     indicator_codes = list(prompted_indicator_codes) if prompted_indicator_codes else _resolve_indicator_codes(
         selected_subjects,
         catalog,
-        legacy,
         aliases,
     )
     indicator_codes = _restrict_codes(indicator_codes, indicator_availability.available_codes)
@@ -490,7 +755,6 @@ def _resolve_country_first_selection(
 def _resolve_indicator_first_selection(
     settings: RuntimeSettings,
     catalog: Catalog,
-    legacy: LegacyCatalog,
     aliases: AliasConfig,
     region_membership: RegionMembership,
     client: ImfWeoClient,
@@ -501,6 +765,7 @@ def _resolve_indicator_first_selection(
 ) -> CoreSelectionState:
     prompted_indicator_codes: list[str] = []
     country_availability: AvailabilityAggregate | None = None
+    prompted_location_codes: list[str] = []
     if settings.interactive and not selected_subjects:
         available_indicator_codes = _fetch_available_indicator_catalog_codes(client, frequency)
         indicator_totals = _fetch_country_availability(
@@ -511,11 +776,15 @@ def _resolve_indicator_first_selection(
             status_message="Checking subject availability...",
         )
         positive_indicator_results = [result for result in indicator_totals.results if result.series_count > 0]
+        indicator_frequency_codes = _fetch_indicator_frequency_details(
+            client,
+            [result.requested_code for result in positive_indicator_results],
+        )
         prompted_indicator_codes = _prompt_for_indicator_codes(
             "Select subject descriptors",
             [result.requested_code for result in positive_indicator_results],
             catalog,
-            legacy,
+            frequency_by_code=_format_indicator_frequency_meta(catalog, indicator_frequency_codes),
             detail_by_code=_build_total_count_details(positive_indicator_results, "location"),
         )
         selected_subjects = list(prompted_indicator_codes)
@@ -532,199 +801,402 @@ def _resolve_indicator_first_selection(
     indicator_codes = list(prompted_indicator_codes) if prompted_indicator_codes else _resolve_indicator_codes(
         selected_subjects,
         catalog,
-        legacy,
         aliases,
     )
     if country_availability is None:
         country_availability = _fetch_country_availability(client, indicator_codes, frequency)
-    available_country_codes = _available_country_codes(catalog, country_availability.available_codes)
-    if not available_country_codes:
-        raise ValueError("No countries are available for the selected subject descriptors and frequency.")
+    available_location_codes = _available_location_codes(catalog, country_availability.available_codes)
+    if not available_location_codes:
+        raise ValueError("No locations are available for the selected subject descriptors and frequency.")
 
     if settings.interactive and not selected_countries:
+        available_country_codes = [code for code in available_location_codes if code in catalog.countries]
         selected_region_codes = _prompt_for_region_codes_for_countries(
             catalog,
             region_membership,
             available_country_codes=available_country_codes,
-        )
+        ) if available_country_codes else []
         preselected_country_codes = region_membership.expand_region_codes(
             selected_region_codes,
             allowed_country_codes=available_country_codes,
         )
-        selected_country_codes = _prompt_for_country_codes(
-            "Select countries",
+        prompt_title = "Select countries" if len(available_country_codes) == len(available_location_codes) else "Select locations"
+        prompted_location_codes = _prompt_for_location_codes(
+            prompt_title,
             catalog,
-            legacy,
-            available_country_codes=available_country_codes,
+            available_location_codes=available_location_codes,
             detail_by_code=_build_ratio_count_details(
-                _filter_count_map(country_availability.counts_by_code, available_country_codes),
+                _filter_count_map(country_availability.counts_by_code, available_location_codes),
                 len(indicator_codes),
                 "subject",
             ),
             preselected=preselected_country_codes,
             required=True,
         )
-        selected_countries = selected_country_codes
+        selected_countries = prompted_location_codes
     if not selected_countries:
         raise ValueError("At least one country or region selector is required.")
 
-    country_codes = _resolve_country_codes(selected_countries, catalog, legacy, aliases, region_membership)
-    country_codes = _restrict_codes(country_codes, available_country_codes)
+    country_codes = (
+        list(prompted_location_codes)
+        if prompted_location_codes
+        else _resolve_country_codes(selected_countries, catalog, aliases, region_membership)
+    )
+    country_codes = _restrict_codes(country_codes, available_location_codes)
     if not country_codes:
-        raise ValueError("No matching countries are available for the selected subject descriptors.")
+        raise ValueError("No matching locations are available for the selected subject descriptors.")
 
     return CoreSelectionState(country_codes=country_codes, indicator_codes=indicator_codes)
 
 
 def _resolve_unit_scale_filters(
     settings: RuntimeSettings,
+    *,
+    country_codes: list[str],
     indicator_codes: list[str],
-    legacy: LegacyCatalog,
+    catalog: Catalog,
+    aliases: AliasConfig,
+    client: ImfWeoClient,
+    frequency: str,
 ) -> FilterSelectionState:
-    selected_units = list(settings.units)
-    selected_scales = list(settings.scales)
+    variants_by_indicator = _fetch_indicator_series_variants(
+        client,
+        country_codes=country_codes,
+        indicator_codes=indicator_codes,
+        frequency=frequency,
+    )
+    selected_unit_codes = _resolve_requested_attribute_codes(
+        settings.units,
+        available_codes=_available_variant_attribute_codes(variants_by_indicator, "unit"),
+        current_labels=catalog.units,
+        display_overrides=aliases.unit_display,
+        manual_aliases=aliases.units,
+        entity_name="unit",
+    )
+    selected_scale_codes = _resolve_requested_attribute_codes(
+        settings.scales,
+        available_codes=_available_variant_attribute_codes(variants_by_indicator, "scale"),
+        current_labels=catalog.scales,
+        display_overrides=aliases.scale_display,
+        manual_aliases=aliases.scales,
+        entity_name="scale",
+    )
 
-    filtered_indicator_codes = _filter_indicator_codes(indicator_codes, selected_units, selected_scales, legacy)
+    filtered_indicator_codes = _filter_indicator_codes(
+        indicator_codes,
+        variants_by_indicator,
+        selected_unit_codes,
+        selected_scale_codes,
+    )
     if not filtered_indicator_codes:
         raise ValueError("No WEO series match the selected Subject Descriptor, Units, and Scale combination.")
 
-    if settings.interactive and not selected_units:
-        filtered_indicator_codes, prompted_units = _resolve_contextual_legacy_filters(
+    if settings.interactive and not selected_unit_codes:
+        filtered_indicator_codes, prompted_units = _resolve_contextual_attribute_filters(
             filtered_indicator_codes,
-            legacy,
+            variants_by_indicator,
+            subject_labels=catalog.indicators,
             dimension_name="units",
-            label_map=legacy.indicator_units,
+            current_labels=catalog.units,
+            display_overrides=aliases.unit_display,
+            manual_aliases=aliases.units,
+            selected_unit_codes=selected_unit_codes,
+            selected_scale_codes=selected_scale_codes,
         )
-        selected_units.extend(prompted_units)
+        selected_unit_codes = _unique_codes(selected_unit_codes + prompted_units)
 
-    if settings.interactive and not selected_scales:
-        filtered_indicator_codes, prompted_scales = _resolve_contextual_legacy_filters(
+    if settings.interactive and not selected_scale_codes:
+        filtered_indicator_codes, prompted_scales = _resolve_contextual_attribute_filters(
             filtered_indicator_codes,
-            legacy,
+            variants_by_indicator,
+            subject_labels=catalog.indicators,
             dimension_name="scales",
-            label_map=legacy.indicator_scales,
+            current_labels=catalog.scales,
+            display_overrides=aliases.scale_display,
+            manual_aliases=aliases.scales,
+            selected_unit_codes=selected_unit_codes,
+            selected_scale_codes=selected_scale_codes,
         )
-        selected_scales.extend(prompted_scales)
+        selected_scale_codes = _unique_codes(selected_scale_codes + prompted_scales)
 
     return FilterSelectionState(
         indicator_codes=filtered_indicator_codes,
-        selected_units=selected_units,
-        selected_scales=selected_scales,
+        selected_unit_codes=selected_unit_codes,
+        selected_scale_codes=selected_scale_codes,
     )
 
 
-def _resolve_contextual_legacy_filters(
+def _resolve_contextual_attribute_filters(
     indicator_codes: list[str],
-    legacy: LegacyCatalog,
+    variants_by_indicator: dict[str, list[SeriesVariant]],
     *,
+    subject_labels: dict[str, str],
     dimension_name: str,
-    label_map: dict[str, set[str]],
+    current_labels: dict[str, str],
+    display_overrides: dict[str, str],
+    manual_aliases: dict[str, str],
+    selected_unit_codes: list[str],
+    selected_scale_codes: list[str],
 ) -> tuple[list[str], list[str]]:
     filtered_codes: list[str] = []
-    prompted_labels: list[str] = []
-    for subject_label, subject_codes in _group_indicator_codes_by_subject(indicator_codes, legacy):
-        choices = _available_legacy_labels(subject_codes, label_map)
-        selected_labels: list[str] = []
-        if _subject_requires_dimension_prompt(subject_codes, label_map) and choices:
-            selected_labels = _resolve_optional_labels(
+    prompted_codes: list[str] = []
+    for subject_label, subject_codes in _group_indicator_codes_by_subject(indicator_codes, subject_labels):
+        choices = _available_attribute_codes(
+            subject_codes,
+            variants_by_indicator,
+            dimension_name=dimension_name,
+            selected_unit_codes=selected_unit_codes,
+            selected_scale_codes=selected_scale_codes,
+        )
+        selected_codes: list[str] = []
+        if _subject_requires_dimension_prompt(
+            subject_codes,
+            variants_by_indicator,
+            dimension_name=dimension_name,
+            selected_unit_codes=selected_unit_codes,
+            selected_scale_codes=selected_scale_codes,
+        ) and choices:
+            selected_codes = _resolve_optional_attribute_codes(
                 f"Select {dimension_name} for {subject_label}",
                 choices,
+                current_labels=current_labels,
+                display_overrides=display_overrides,
+                manual_aliases=manual_aliases,
             )
-            prompted_labels.extend(selected_labels)
+            prompted_codes.extend(selected_codes)
         matching_codes = _filter_indicator_codes(
             subject_codes,
-            selected_labels if dimension_name == "units" else [],
-            selected_labels if dimension_name == "scales" else [],
-            legacy,
+            variants_by_indicator,
+            selected_codes if dimension_name == "units" else selected_unit_codes,
+            selected_codes if dimension_name == "scales" else selected_scale_codes,
         )
         if not matching_codes:
             raise ValueError("No WEO series match the selected Subject Descriptor, Units, and Scale combination.")
         for code in matching_codes:
             if code not in filtered_codes:
                 filtered_codes.append(code)
-    return filtered_codes, prompted_labels
+    return filtered_codes, _unique_codes(prompted_codes)
 
 
 def _group_indicator_codes_by_subject(
     indicator_codes: list[str],
-    legacy: LegacyCatalog,
+    subject_labels: dict[str, str],
 ) -> list[tuple[str, list[str]]]:
     grouped: dict[str, list[str]] = {}
     for code in indicator_codes:
-        subject_label = legacy.preferred_subject_labels.get(code, code)
+        subject_label = subject_labels.get(code, code)
         grouped.setdefault(subject_label, []).append(code)
     return list(grouped.items())
 
 
-def _subject_requires_dimension_prompt(indicator_codes: list[str], label_map: dict[str, set[str]]) -> bool:
+def _subject_requires_dimension_prompt(
+    indicator_codes: list[str],
+    variants_by_indicator: dict[str, list[SeriesVariant]],
+    *,
+    dimension_name: str,
+    selected_unit_codes: list[str],
+    selected_scale_codes: list[str],
+) -> bool:
     return any(
-        _indicator_has_multiple_dimension_values(code, label_map)
+        _indicator_has_multiple_dimension_values(
+            code,
+            variants_by_indicator,
+            dimension_name=dimension_name,
+            selected_unit_codes=selected_unit_codes,
+            selected_scale_codes=selected_scale_codes,
+        )
         for code in indicator_codes
     )
 
 
-def _indicator_has_multiple_dimension_values(indicator_code: str, label_map: dict[str, set[str]]) -> bool:
-    return len(_non_empty_legacy_labels(label_map.get(indicator_code, set()))) > 1
-
-
-def _non_empty_legacy_labels(labels: set[str]) -> set[str]:
-    return {label for label in labels if label}
+def _indicator_has_multiple_dimension_values(
+    indicator_code: str,
+    variants_by_indicator: dict[str, list[SeriesVariant]],
+    *,
+    dimension_name: str,
+    selected_unit_codes: list[str],
+    selected_scale_codes: list[str],
+) -> bool:
+    return len(
+        _attribute_codes_for_indicator(
+            indicator_code,
+            variants_by_indicator,
+            dimension_name=dimension_name,
+            selected_unit_codes=selected_unit_codes,
+            selected_scale_codes=selected_scale_codes,
+        )
+    ) > 1
 
 
 def _build_resolved_selections(
     *,
     country_codes: list[str],
     indicator_codes: list[str],
-    selected_scales: list[str],
+    selected_unit_codes: list[str],
+    selected_scale_codes: list[str],
     catalog: Catalog,
-    legacy: LegacyCatalog,
     aliases: AliasConfig,
 ) -> ResolvedSelections:
-    indicator_unit_labels = {
-        code: legacy.preferred_unit_labels.get(code, next(iter(legacy.indicator_units.get(code, {""})), ""))
-        for code in indicator_codes
-    }
-    indicator_scale_labels = {
-        code: legacy.preferred_scale_labels.get(code, next(iter(legacy.indicator_scales.get(code, {""})), ""))
-        for code in indicator_codes
-    }
-    indicator_unit_codes = {
-        code: _resolve_optional_code_from_label(indicator_unit_labels[code], catalog.units, aliases.units)
-        for code in indicator_codes
-    }
-    scale_codes = _resolve_contextual_codes(
-        requested=selected_scales,
-        available_codes=list(catalog.scales.keys()),
-        current_labels=catalog.scales,
-        display_overrides=aliases.scale_display,
-        manual_aliases=aliases.scales,
-        entity_name="scale",
-    )
-    country_labels = {code: legacy.preferred_country_labels.get(code, catalog.locations[code]) for code in country_codes}
-    subject_labels = {
-        code: legacy.preferred_subject_labels.get(code, catalog.indicators[code]) for code in indicator_codes
-    }
+    country_labels = {code: catalog.locations[code] for code in country_codes}
+    subject_labels = {code: catalog.indicators[code] for code in indicator_codes}
     unit_labels = {
         code: aliases.unit_display.get(code, catalog.units.get(code, code))
-        for code in indicator_unit_codes.values()
+        for code in selected_unit_codes or catalog.units
         if code
     }
     scale_labels = {
-        code: aliases.scale_display.get(code, catalog.scales.get(code, code)) for code in catalog.scales
+        code: aliases.scale_display.get(code, catalog.scales.get(code, code))
+        for code in selected_scale_codes or catalog.scales
     }
     return ResolvedSelections(
         country_codes=country_codes,
         indicator_codes=indicator_codes,
-        unit_codes=[code for code in indicator_unit_codes.values() if code],
-        scale_codes=scale_codes,
+        unit_codes=list(selected_unit_codes),
+        scale_codes=list(selected_scale_codes),
         country_labels=country_labels,
         subject_labels=subject_labels,
         unit_labels=unit_labels,
         scale_labels=scale_labels,
-        indicator_unit_labels=indicator_unit_labels,
-        indicator_unit_codes=indicator_unit_codes,
-        indicator_scale_labels=indicator_scale_labels,
     )
+
+
+def _fetch_indicator_series_variants(
+    client: ImfWeoClient,
+    *,
+    country_codes: list[str],
+    indicator_codes: list[str],
+    frequency: str,
+) -> dict[str, list[SeriesVariant]]:
+    return run_with_status(
+        "Checking available units and scales...",
+        client.fetch_indicator_series_variants,
+        country_codes=country_codes,
+        indicator_codes=indicator_codes,
+        frequency=frequency,
+    )
+
+
+def _resolve_requested_attribute_codes(
+    requested: list[str],
+    *,
+    available_codes: list[str],
+    current_labels: dict[str, str],
+    display_overrides: dict[str, str],
+    manual_aliases: dict[str, str],
+    entity_name: str,
+) -> list[str]:
+    if not requested:
+        return []
+    codes = available_codes or list(current_labels.keys())
+    return _resolve_contextual_codes(
+        requested=requested,
+        available_codes=codes,
+        current_labels=current_labels,
+        display_overrides=display_overrides,
+        manual_aliases=manual_aliases,
+        entity_name=entity_name,
+    )
+
+
+def _available_variant_attribute_codes(
+    variants_by_indicator: dict[str, list[SeriesVariant]],
+    dimension_name: str,
+) -> list[str]:
+    codes = {
+        _variant_dimension_value(variant, dimension_name)
+        for variants in variants_by_indicator.values()
+        for variant in variants
+        if _variant_dimension_value(variant, dimension_name)
+    }
+    return sorted(codes)
+
+
+def _available_attribute_codes(
+    indicator_codes: list[str],
+    variants_by_indicator: dict[str, list[SeriesVariant]],
+    *,
+    dimension_name: str,
+    selected_unit_codes: list[str],
+    selected_scale_codes: list[str],
+) -> list[str]:
+    codes = {
+        code
+        for indicator_code in indicator_codes
+        for code in _attribute_codes_for_indicator(
+            indicator_code,
+            variants_by_indicator,
+            dimension_name=dimension_name,
+            selected_unit_codes=selected_unit_codes,
+            selected_scale_codes=selected_scale_codes,
+        )
+    }
+    return sorted(codes)
+
+
+def _attribute_codes_for_indicator(
+    indicator_code: str,
+    variants_by_indicator: dict[str, list[SeriesVariant]],
+    *,
+    dimension_name: str,
+    selected_unit_codes: list[str],
+    selected_scale_codes: list[str],
+) -> list[str]:
+    values = {
+        _variant_dimension_value(variant, dimension_name)
+        for variant in variants_by_indicator.get(indicator_code, [])
+        if _variant_matches_filters(
+            variant,
+            selected_unit_codes=selected_unit_codes,
+            selected_scale_codes=selected_scale_codes,
+        )
+        and _variant_dimension_value(variant, dimension_name)
+    }
+    return sorted(values)
+
+
+def _variant_dimension_value(variant: SeriesVariant, dimension_name: str) -> str:
+    if dimension_name == "units":
+        return variant.unit_code
+    return variant.scale_code
+
+
+def _variant_matches_filters(
+    variant: SeriesVariant,
+    *,
+    selected_unit_codes: list[str],
+    selected_scale_codes: list[str],
+) -> bool:
+    unit_match = not selected_unit_codes or variant.unit_code in selected_unit_codes
+    scale_match = not selected_scale_codes or variant.scale_code in selected_scale_codes
+    return unit_match and scale_match
+
+
+def _resolve_optional_attribute_codes(
+    prompt: str,
+    codes: list[str],
+    *,
+    current_labels: dict[str, str],
+    display_overrides: dict[str, str],
+    manual_aliases: dict[str, str],
+) -> list[str]:
+    if not codes:
+        return []
+    if len(codes) == 1:
+        return list(codes)
+    choices = _build_choice_map(
+        {code: current_labels.get(code, code) for code in codes},
+        {code: display_overrides.get(code, current_labels.get(code, code)) for code in codes},
+        preselected=codes,
+    )
+    return _prompt_for_codes(prompt, choices, required=False)
+
+
+def _unique_codes(values: list[str]) -> list[str]:
+    unique: list[str] = []
+    for value in values:
+        if value and value not in unique:
+            unique.append(value)
+    return unique
 
 
 def _fetch_indicator_availability(
@@ -776,6 +1248,21 @@ def _fetch_available_frequency_codes(client: ImfWeoClient) -> list[str]:
     )
 
 
+def _fetch_available_frequency_codes_for_scope(
+    client: ImfWeoClient,
+    country_codes: list[str],
+    indicator_codes: list[str],
+) -> list[str]:
+    if not hasattr(client, "fetch_available_frequencies"):
+        return _fetch_available_frequency_codes(client)
+    return run_with_status(
+        "Checking available frequencies...",
+        client.fetch_available_frequencies,
+        country_codes=country_codes,
+        indicator_codes=indicator_codes,
+    )
+
+
 def _fetch_available_indicator_catalog_codes(client: ImfWeoClient, frequency: str) -> list[str]:
     return run_with_status(
         "Checking available subjects...",
@@ -789,13 +1276,46 @@ def _fetch_available_time_periods(
     country_codes: list[str],
     indicator_codes: list[str],
     frequency: str,
-    ) -> list[int]:
-    return run_with_status(
-        "Checking available years...",
+    ) -> list[TimePeriod]:
+    raw_periods = run_with_status(
+        "Checking available time periods...",
         client.fetch_available_time_periods,
         country_codes=country_codes,
         indicator_codes=indicator_codes,
         frequency=frequency,
+    )
+    periods: list[TimePeriod] = []
+    for raw_period in raw_periods:
+        if isinstance(raw_period, TimePeriod):
+            periods.append(raw_period)
+            continue
+        parsed = parse_time_period(raw_period, frequency)
+        if parsed is not None:
+            periods.append(parsed)
+    return periods
+
+
+def _fetch_indicator_frequency_details(
+    client: ImfWeoClient,
+    indicator_codes: list[str],
+    *,
+    country_codes: list[str] | None = None,
+) -> dict[str, list[str]]:
+    if not indicator_codes:
+        return {}
+    if hasattr(client, "fetch_indicator_frequency_availability"):
+        return run_with_status(
+            "Checking available frequencies...",
+            client.fetch_indicator_frequency_availability,
+            indicator_codes=indicator_codes,
+            country_codes=country_codes,
+        )
+    return run_with_status(
+        "Checking available frequencies...",
+        lambda: {
+            indicator_code: client.fetch_available_frequencies(list(country_codes or []), [indicator_code])
+            for indicator_code in indicator_codes
+        },
     )
 
 
@@ -823,10 +1343,14 @@ def _available_country_codes(catalog: Catalog, available_location_codes: list[st
     return [code for code in catalog.countries if code in available]
 
 
+def _available_location_codes(catalog: Catalog, available_location_codes: list[str]) -> list[str]:
+    available = set(available_location_codes)
+    return [code for code in catalog.locations if code in available]
+
+
 def _resolve_country_codes(
     requested: list[str],
     catalog: Catalog,
-    legacy: LegacyCatalog,
     aliases: AliasConfig,
     region_membership: RegionMembership,
 ) -> list[str]:
@@ -835,8 +1359,7 @@ def _resolve_country_codes(
     location_codes = _resolve_codes(
         requested=requested,
         current_labels=catalog.locations,
-        preferred_labels=legacy.preferred_country_labels,
-        workbook_aliases=legacy.country_aliases,
+        preferred_labels=catalog.locations,
         manual_aliases=aliases.countries,
         entity_name="country or region",
     )
@@ -846,14 +1369,12 @@ def _resolve_country_codes(
 def _resolve_indicator_codes(
     requested: list[str],
     catalog: Catalog,
-    legacy: LegacyCatalog,
     aliases: AliasConfig,
 ) -> list[str]:
     return _resolve_codes(
         requested=requested,
         current_labels=catalog.indicators,
-        preferred_labels=legacy.preferred_subject_labels,
-        workbook_aliases=legacy.subject_aliases,
+        preferred_labels=catalog.indicators,
         manual_aliases=aliases.subjects,
         entity_name="subject descriptor",
         allow_multiple_matches=True,
@@ -863,19 +1384,40 @@ def _resolve_indicator_codes(
 def _prompt_for_country_codes(
     prompt: str,
     catalog: Catalog,
-    legacy: LegacyCatalog,
     available_country_codes: list[str] | None = None,
     preselected: list[str] | None = None,
     detail_by_code: dict[str, str] | None = None,
     required: bool = True,
-) -> list[str]:
+    ) -> list[str]:
     codes = available_country_codes or list(catalog.countries.keys())
     return _prompt_for_codes(
         prompt,
         _build_choice_map_for_codes(
             codes,
             catalog.countries,
-            legacy.preferred_country_labels,
+            catalog.countries,
+            preselected=preselected,
+            detail_by_code=detail_by_code,
+        ),
+        required=required,
+    )
+
+
+def _prompt_for_location_codes(
+    prompt: str,
+    catalog: Catalog,
+    available_location_codes: list[str] | None = None,
+    preselected: list[str] | None = None,
+    detail_by_code: dict[str, str] | None = None,
+    required: bool = True,
+) -> list[str]:
+    codes = available_location_codes or list(catalog.locations.keys())
+    return _prompt_for_codes(
+        prompt,
+        _build_choice_map_for_codes(
+            codes,
+            catalog.locations,
+            catalog.locations,
             preselected=preselected,
             detail_by_code=detail_by_code,
         ),
@@ -928,18 +1470,16 @@ def _prompt_for_indicator_codes(
     prompt: str,
     available_indicator_codes: list[str],
     catalog: Catalog,
-    legacy: LegacyCatalog,
+    frequency_by_code: dict[str, str] | None = None,
     detail_by_code: dict[str, str] | None = None,
 ) -> list[str]:
-    preferred_labels = {
-        code: legacy.preferred_subject_labels.get(code, catalog.indicators[code]) for code in available_indicator_codes
-    }
     return _prompt_for_codes(
         prompt,
         _build_choice_map_for_codes(
             available_indicator_codes,
             catalog.indicators,
-            preferred_labels,
+            catalog.indicators,
+            meta_by_code=frequency_by_code,
             detail_by_code=detail_by_code,
         ),
     )
@@ -989,8 +1529,7 @@ def _resolve_codes(
     requested: list[str],
     current_labels: dict[str, str],
     preferred_labels: dict[str, str],
-    workbook_aliases: dict[str, set[str]],
-    manual_aliases: dict[str, str],
+    manual_aliases: dict[str, list[str]],
     entity_name: str,
     allow_multiple_matches: bool = False,
 ) -> list[str]:
@@ -1003,11 +1542,9 @@ def _resolve_codes(
         normalized_map.setdefault(normalize_label(label), set()).add(code)
     for code, label in preferred_labels.items():
         normalized_map.setdefault(normalize_label(label), set()).add(code)
-    for code, aliases in workbook_aliases.items():
-        for alias in aliases:
-            normalized_map.setdefault(normalize_label(alias), set()).add(code)
-    for alias, code in manual_aliases.items():
-        normalized_map.setdefault(alias, set()).add(code)
+    for alias, codes in manual_aliases.items():
+        for code in codes:
+            normalized_map.setdefault(alias, set()).add(code)
 
     resolved: list[str] = []
     for item in requested:
@@ -1059,25 +1596,12 @@ def _resolve_contextual_codes(
     return resolved
 
 
-def _resolve_optional_code_from_label(
-    label: str,
-    current_labels: dict[str, str],
-    manual_aliases: dict[str, str],
-) -> str:
-    if not label:
-        return ""
-    normalized = normalize_label(label)
-    for code, current_label in current_labels.items():
-        if normalize_label(code) == normalized or normalize_label(current_label) == normalized:
-            return code
-    return manual_aliases.get(normalized, "")
-
-
 def _build_choice_map_for_codes(
     codes: list[str],
     current_labels: dict[str, str],
     preferred_labels: dict[str, str],
     preselected: list[str] | None = None,
+    meta_by_code: dict[str, str] | None = None,
     detail_by_code: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     subset = {code: current_labels[code] for code in codes}
@@ -1085,6 +1609,7 @@ def _build_choice_map_for_codes(
         subset,
         preferred_labels,
         preselected=preselected,
+        meta_by_code=meta_by_code,
         detail_by_code=detail_by_code,
     )
 
@@ -1093,6 +1618,7 @@ def _build_choice_map(
     current_labels: dict[str, str],
     preferred_labels: dict[str, str],
     preselected: list[str] | None = None,
+    meta_by_code: dict[str, str] | None = None,
     detail_by_code: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     choices: list[dict[str, Any]] = []
@@ -1102,6 +1628,8 @@ def _build_choice_map(
         if preferred != current_label:
             title = f"{title} ({current_label})"
         choice: dict[str, Any] = {"name": title, "value": code}
+        if meta_by_code and code in meta_by_code:
+            choice["meta"] = meta_by_code[code]
         if detail_by_code and code in detail_by_code:
             choice["detail"] = detail_by_code[code]
         if preselected and code in preselected:
@@ -1110,56 +1638,25 @@ def _build_choice_map(
     return choices
 
 
-def _build_label_choices(labels: list[str], preselect_all: bool = False) -> list[dict[str, Any]]:
-    choices: list[dict[str, Any]] = []
-    for label in labels:
-        choice: dict[str, Any] = {"name": label, "value": label}
-        if preselect_all:
-            choice["checked"] = True
-        choices.append(choice)
-    return choices
-
-
-def _resolve_optional_labels(prompt: str, labels: list[str]) -> list[str]:
-    if not labels:
-        return []
-    if len(labels) == 1:
-        return list(labels)
-    return _prompt_for_labels(
-        prompt,
-        _build_label_choices(labels, preselect_all=True),
-        required=False,
-    )
-
-
-def _available_legacy_labels(indicator_codes: list[str], label_map: dict[str, set[str]]) -> list[str]:
-    labels = {
-        label
-        for code in indicator_codes
-        for label in label_map.get(code, set())
-        if label
-    }
-    return sorted(labels)
-
-
 def _filter_indicator_codes(
     indicator_codes: list[str],
-    selected_units: list[str],
-    selected_scales: list[str],
-    legacy: LegacyCatalog,
+    variants_by_indicator: dict[str, list[SeriesVariant]],
+    selected_unit_codes: list[str],
+    selected_scale_codes: list[str],
 ) -> list[str]:
-    if not selected_units and not selected_scales:
+    if not selected_unit_codes and not selected_scale_codes:
         return indicator_codes
 
-    normalized_units = {normalize_label(value) for value in selected_units}
-    normalized_scales = {normalize_label(value) for value in selected_scales}
     filtered: list[str] = []
     for code in indicator_codes:
-        legacy_units = {normalize_label(value) for value in legacy.indicator_units.get(code, set())}
-        legacy_scales = {normalize_label(value) for value in legacy.indicator_scales.get(code, set())}
-        unit_match = not normalized_units or bool(normalized_units & legacy_units)
-        scale_match = not normalized_scales or bool(normalized_scales & legacy_scales)
-        if unit_match and scale_match:
+        if any(
+            _variant_matches_filters(
+                variant,
+                selected_unit_codes=selected_unit_codes,
+                selected_scale_codes=selected_scale_codes,
+            )
+            for variant in variants_by_indicator.get(code, [])
+        ):
             filtered.append(code)
     return filtered
 
@@ -1173,10 +1670,6 @@ def _prompt_for_codes(prompt: str, choices: list[dict[str, Any]], required: bool
     if required and not result:
         raise ValueError(f"{prompt} requires at least one selection.")
     return result
-
-
-def _prompt_for_labels(prompt: str, choices: list[dict[str, Any]], required: bool = True) -> list[str]:
-    return _prompt_for_codes(prompt, choices, required=required)
 
 
 def _build_total_count_details(results: list[AvailabilityResult], counterpart_name: str) -> dict[str, str]:
@@ -1201,6 +1694,23 @@ def _build_ratio_count_details(
 def _filter_count_map(counts_by_code: dict[str, int], codes: list[str]) -> dict[str, int]:
     allowed = set(codes)
     return {code: count for code, count in counts_by_code.items() if code in allowed}
+
+
+def _format_indicator_frequency_meta(
+    catalog: Catalog,
+    frequency_codes_by_indicator: dict[str, list[str]],
+) -> dict[str, str]:
+    ordering = {code: index for index, code in enumerate(catalog.frequencies)}
+
+    def sort_key(code: str) -> tuple[int, str]:
+        return ordering.get(code, len(ordering)), code
+
+    formatted: dict[str, str] = {}
+    for indicator_code, frequency_codes in frequency_codes_by_indicator.items():
+        unique_codes = sorted({code for code in frequency_codes if code}, key=sort_key)
+        if unique_codes:
+            formatted[indicator_code] = ",".join(unique_codes)
+    return formatted
 
 
 def _pluralize(noun: str, count: int) -> str:
@@ -1366,45 +1876,10 @@ def _convert_period_header_cells(worksheet: Any, *, frequency: str, fixed_header
 
 
 def _parse_period_header_to_datetime(value: Any, frequency: str) -> datetime | None:
-    if value in {None, ""}:
+    period = parse_time_period(value, frequency)
+    if period is None or period.end_date is None:
         return None
-
-    normalized_frequency = str(frequency or "").strip().upper()
-    text = str(value).strip()
-    if not text:
-        return None
-
-    if normalized_frequency == "A":
-        if re.fullmatch(r"\d{4}", text):
-            return datetime(int(text), 12, 31)
-        return None
-
-    if normalized_frequency == "Q":
-        match = re.fullmatch(r"(\d{4})[- ]?Q([1-4])", text)
-        if match is None:
-            return None
-        year = int(match.group(1))
-        quarter = int(match.group(2))
-        month = quarter * 3
-        return _end_of_month(year, month)
-
-    if normalized_frequency == "M":
-        match = re.fullmatch(r"(\d{4})(?:[-/ ]|M)(\d{1,2})", text)
-        if match is None:
-            return None
-        year = int(match.group(1))
-        month = int(match.group(2))
-        if month < 1 or month > 12:
-            return None
-        return _end_of_month(year, month)
-
-    if normalized_frequency == "D":
-        parsed = pd.to_datetime(text, errors="coerce")
-        if pd.isna(parsed):
-            return None
-        return parsed.to_pydatetime()
-
-    return None
+    return datetime.combine(period.end_date, datetime.min.time())
 
 
 def _end_of_month(year: int, month: int) -> datetime:

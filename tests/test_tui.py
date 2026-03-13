@@ -175,6 +175,24 @@ def test_render_choices_renders_detail_in_separate_column() -> None:
     )
 
 
+def test_render_choices_renders_frequency_meta_in_separate_column() -> None:
+    prompt = SearchableMultiSelect(
+        "Select subject descriptors",
+        [
+            Choice(name="Gross domestic product, current prices [NGDPD]", value="NGDPD", meta="A,Q", detail="2 locations"),
+        ],
+    )
+    prompt.cursor = -1
+
+    fragments = prompt._render_choices()
+
+    assert any(fragment[0] == "class:meta" and "A,Q" in str(fragment[1]) for fragment in fragments)
+    assert not any(
+        fragment[0] != "class:meta" and "Gross domestic product, current prices [NGDPD]  A,Q" in str(fragment[1])
+        for fragment in fragments
+    )
+
+
 def test_render_choices_wraps_long_labels_without_losing_detail(monkeypatch) -> None:
     prompt = SearchableMultiSelect(
         "Select countries",
@@ -352,6 +370,30 @@ def test_run_with_status_uses_active_session() -> None:
 
     assert calls == ["Checking available countries..."]
     assert result == 3
+
+
+def test_prompt_for_time_range_uses_active_session() -> None:
+    class FakeSession:
+        def prompt_time_range(self, **kwargs):
+            assert kwargs["title"] == "Select time range"
+            assert kwargs["start_value"] == "2022"
+            assert kwargs["end_value"] == "2024"
+            return ("2022", "2024")
+
+    previous = tui._ACTIVE_SESSION
+    tui._ACTIVE_SESSION = FakeSession()
+    try:
+        assert tui.prompt_for_time_range(
+            title="Select time range",
+            start_value="2022",
+            end_value="2024",
+            start_placeholder="2024",
+            end_placeholder="2024",
+            caption="Enter a year like 2024.",
+            validate=lambda start, end: (start, end),
+        ) == ("2022", "2024")
+    finally:
+        tui._ACTIVE_SESSION = previous
 
 
 def test_no_matches_disables_cursor_movement() -> None:

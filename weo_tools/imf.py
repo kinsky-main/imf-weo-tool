@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from calendar import monthrange
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from datetime import date, datetime
 import json
 import re
 from typing import Any, Callable
@@ -69,13 +71,35 @@ class AvailabilityLookupError(ValueError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class TimePeriod:
+    raw_value: str
+    display_value: int | str
+    display_text: str
+    sort_key: str
+    start_date: date | None
+    end_date: date | None
+    frequency: str
+
+
+@dataclass(frozen=True, slots=True)
+class SeriesVariant:
+    unit_code: str
+    scale_code: str
+
+
 class ImfWeoClient:
     def __init__(self) -> None:
         self._catalog: Catalog | None = None
         self._available_frequency_codes: list[str] | None = None
+        self._available_frequency_codes_by_scope: dict[tuple[tuple[str, ...], tuple[str, ...]], list[str]] = {}
         self._available_location_codes_by_frequency: dict[str, list[str]] = {}
         self._available_indicator_catalog_codes_by_frequency: dict[str, list[str]] = {}
-        self._available_time_periods_by_scope: dict[tuple[str, tuple[str, ...], tuple[str, ...]], list[int]] = {}
+        self._available_time_periods_by_scope: dict[tuple[str, tuple[str, ...], tuple[str, ...]], list[TimePeriod]] = {}
+        self._series_variants_by_scope: dict[
+            tuple[str, tuple[str, ...], tuple[str, ...]],
+            dict[str, list[SeriesVariant]],
+        ] = {}
         self._service = RestService(
             API_BASE,
             ApiVersion.V2_2_2,
@@ -133,6 +157,51 @@ class ImfWeoClient:
         )
         self._available_frequency_codes = available_codes
         return list(available_codes)
+
+    def fetch_available_frequencies(
+        self,
+        country_codes: list[str],
+        indicator_codes: list[str],
+    ) -> list[str]:
+        scope = (tuple(sorted(country_codes)), tuple(sorted(indicator_codes)))
+        cached = self._available_frequency_codes_by_scope.get(scope)
+        if cached is not None:
+            return list(cached)
+
+        pending: list[tuple[list[str], list[str]]] = [(list(country_codes), list(indicator_codes))]
+        available_codes: set[str] = set()
+        while pending:
+            batch_countries, batch_indicators = pending.pop(0)
+            key = self._build_key(batch_countries, batch_indicators, "*")
+            if len(key) > MAX_DATA_QUERY_KEY_LENGTH and (len(batch_countries) > 1 or len(batch_indicators) > 1):
+                pending = self._split_data_request(batch_countries, batch_indicators) + pending
+                continue
+            available_codes.update(self._fetch_batched_available_codes(component_id="FREQUENCY", key=key))
+
+        resolved = sorted(available_codes)
+        self._available_frequency_codes_by_scope[scope] = resolved
+        return list(resolved)
+
+    def fetch_indicator_frequency_availability(
+        self,
+        indicator_codes: list[str],
+        country_codes: list[str] | None = None,
+    ) -> dict[str, list[str]]:
+        scoped_country_codes = list(country_codes or [])
+        if not indicator_codes:
+            return {}
+
+        results: dict[str, list[str]] = {}
+        max_workers = min(MAX_AVAILABILITY_WORKERS, len(indicator_codes))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(self.fetch_available_frequencies, scoped_country_codes, [indicator_code]): indicator_code
+                for indicator_code in indicator_codes
+            }
+            for future in as_completed(futures):
+                indicator_code = futures[future]
+                results[indicator_code] = future.result()
+        return {code: results.get(code, []) for code in indicator_codes}
 
     def fetch_available_location_codes(self, frequency: str) -> list[str]:
         cached = self._available_location_codes_by_frequency.get(frequency)
@@ -217,9 +286,8 @@ class ImfWeoClient:
         country_labels: dict[str, str],
         unit_labels: dict[str, str],
         scale_labels: dict[str, str],
-        indicator_unit_labels: dict[str, str],
-        indicator_unit_codes: dict[str, str],
-        indicator_scale_labels: dict[str, str],
+        start_period: TimePeriod | None = None,
+        end_period: TimePeriod | None = None,
     ) -> pd.DataFrame:
         csv_frame = self._fetch_batched_dataframe(
             country_codes=country_codes,
@@ -234,22 +302,26 @@ class ImfWeoClient:
             subject_labels=subject_labels,
             unit_labels=unit_labels,
             scale_labels=scale_labels,
-            indicator_unit_labels=indicator_unit_labels,
-            indicator_unit_codes=indicator_unit_codes,
-            indicator_scale_labels=indicator_scale_labels,
         )
-        if start_year is not None:
-            dataframe = dataframe[dataframe["time_period"] >= start_year]
-        if end_year is not None:
-            dataframe = dataframe[dataframe["time_period"] <= end_year]
-        return dataframe.reset_index(drop=True)
+        dataframe = _filter_dataframe_by_attribute_codes(dataframe, unit_codes=unit_codes, scale_codes=scale_codes)
+        dataframe = _filter_dataframe_by_time_range(
+            dataframe,
+            start_year=start_year,
+            end_year=end_year,
+            start_period=start_period,
+            end_period=end_period,
+        )
+        return dataframe.drop(
+            columns=["_time_period_sort", "_time_period_start", "_time_period_end"],
+            errors="ignore",
+        ).reset_index(drop=True)
 
     def fetch_available_time_periods(
         self,
         country_codes: list[str],
         indicator_codes: list[str],
         frequency: str,
-    ) -> list[int]:
+    ) -> list[TimePeriod]:
         scope = (
             frequency,
             tuple(sorted(country_codes)),
@@ -264,17 +336,33 @@ class ImfWeoClient:
             indicator_codes=indicator_codes,
             frequency=frequency,
         )
-        if frame.empty or "TIME_PERIOD" not in frame.columns:
-            periods: list[int] = []
-        else:
-            periods = sorted(
-                {
-                    int(value)
-                    for value in pd.to_numeric(frame["TIME_PERIOD"], errors="coerce").dropna().tolist()
-                }
-            )
+        periods = _collect_available_time_periods(frame, frequency)
         self._available_time_periods_by_scope[scope] = periods
         return list(periods)
+
+    def fetch_indicator_series_variants(
+        self,
+        country_codes: list[str],
+        indicator_codes: list[str],
+        frequency: str,
+    ) -> dict[str, list[SeriesVariant]]:
+        scope = (
+            frequency,
+            tuple(sorted(country_codes)),
+            tuple(sorted(indicator_codes)),
+        )
+        cached = self._series_variants_by_scope.get(scope)
+        if cached is not None:
+            return {code: list(variants) for code, variants in cached.items()}
+
+        frame = self._fetch_batched_dataframe(
+            country_codes=country_codes,
+            indicator_codes=indicator_codes,
+            frequency=frequency,
+        )
+        variants = _collect_series_variants(frame, indicator_codes)
+        self._series_variants_by_scope[scope] = variants
+        return {code: list(series_variants) for code, series_variants in variants.items()}
 
     def _fetch_batched_dataframe(
         self,
@@ -507,6 +595,159 @@ def _split_weo_locations(locations: dict[str, str]) -> tuple[dict[str, str], dic
     return countries, country_groups
 
 
+def parse_time_period(value: Any, frequency: str) -> TimePeriod | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    normalized_frequency = str(frequency or "").strip().upper()
+    if normalized_frequency == "A":
+        match = re.fullmatch(r"(\d{4})", text)
+        if match is None:
+            return None
+        year = int(match.group(1))
+        start = date(year, 1, 1)
+        end = date(year, 12, 31)
+        return TimePeriod(
+            raw_value=text,
+            display_value=year,
+            display_text=str(year),
+            sort_key=end.isoformat(),
+            start_date=start,
+            end_date=end,
+            frequency=normalized_frequency,
+        )
+
+    if normalized_frequency == "Q":
+        match = (
+            re.fullmatch(r"Q([1-4])\s+(\d{4})", text, flags=re.IGNORECASE)
+            or re.fullmatch(r"(\d{4})[- ]?Q([1-4])", text, flags=re.IGNORECASE)
+            or re.fullmatch(r"(\d{4})Q([1-4])", text, flags=re.IGNORECASE)
+        )
+        if match is None:
+            return None
+        if text.upper().startswith("Q"):
+            quarter = int(match.group(1))
+            year = int(match.group(2))
+        else:
+            year = int(match.group(1))
+            quarter = int(match.group(2))
+        start_month = (quarter - 1) * 3 + 1
+        end_month = quarter * 3
+        start = date(year, start_month, 1)
+        end = date(year, end_month, monthrange(year, end_month)[1])
+        display = f"Q{quarter} {year}"
+        return TimePeriod(
+            raw_value=text,
+            display_value=display,
+            display_text=display,
+            sort_key=end.isoformat(),
+            start_date=start,
+            end_date=end,
+            frequency=normalized_frequency,
+        )
+
+    if normalized_frequency == "M":
+        match = (
+            re.fullmatch(r"(\d{2})\.(\d{4})", text)
+            or re.fullmatch(r"(\d{4})[-/](\d{1,2})", text)
+            or re.fullmatch(r"(\d{4})M(\d{1,2})", text, flags=re.IGNORECASE)
+        )
+        if match is None:
+            return None
+        if "." in text:
+            month = int(match.group(1))
+            year = int(match.group(2))
+        else:
+            year = int(match.group(1))
+            month = int(match.group(2))
+        if month < 1 or month > 12:
+            return None
+        start = date(year, month, 1)
+        end = date(year, month, monthrange(year, month)[1])
+        display = f"{month:02d}.{year}"
+        return TimePeriod(
+            raw_value=text,
+            display_value=display,
+            display_text=display,
+            sort_key=end.isoformat(),
+            start_date=start,
+            end_date=end,
+            frequency=normalized_frequency,
+        )
+
+    if normalized_frequency == "D":
+        parsed: date | None = None
+        for pattern in ("%d.%m.%Y", "%Y-%m-%d", "%Y/%m/%d"):
+            try:
+                parsed = datetime.strptime(text, pattern).date()
+                break
+            except ValueError:
+                parsed = None
+        if parsed is None:
+            return None
+        display = parsed.strftime("%d.%m.%Y")
+        return TimePeriod(
+            raw_value=text,
+            display_value=display,
+            display_text=display,
+            sort_key=parsed.isoformat(),
+            start_date=parsed,
+            end_date=parsed,
+            frequency=normalized_frequency,
+        )
+
+    return TimePeriod(
+        raw_value=text,
+        display_value=text,
+        display_text=text,
+        sort_key=f"raw:{text}",
+        start_date=None,
+        end_date=None,
+        frequency=normalized_frequency,
+    )
+
+
+def _collect_available_time_periods(csv_frame: pd.DataFrame, frequency: str) -> list[TimePeriod]:
+    if csv_frame.empty or "TIME_PERIOD" not in csv_frame.columns:
+        return []
+
+    periods_by_sort_key: dict[str, TimePeriod] = {}
+    for raw_value in csv_frame["TIME_PERIOD"].dropna().astype(str).tolist():
+        period = parse_time_period(raw_value, frequency)
+        if period is None:
+            continue
+        periods_by_sort_key.setdefault(period.sort_key, period)
+    return [periods_by_sort_key[key] for key in sorted(periods_by_sort_key)]
+
+
+def _filter_dataframe_by_time_range(
+    dataframe: pd.DataFrame,
+    *,
+    start_year: int | None,
+    end_year: int | None,
+    start_period: TimePeriod | None,
+    end_period: TimePeriod | None,
+) -> pd.DataFrame:
+    filtered = dataframe
+    if start_period is not None:
+        filtered = filtered[filtered["_time_period_sort"] >= start_period.sort_key]
+    elif start_year is not None:
+        lower_bound = date(start_year, 1, 1)
+        filtered = filtered[
+            filtered["_time_period_end"].isna() | (filtered["_time_period_end"] >= lower_bound)
+        ]
+
+    if end_period is not None:
+        filtered = filtered[filtered["_time_period_sort"] <= end_period.sort_key]
+    elif end_year is not None:
+        upper_bound = date(end_year, 12, 31)
+        filtered = filtered[
+            filtered["_time_period_start"].isna() | (filtered["_time_period_start"] <= upper_bound)
+        ]
+    return filtered
+
+
 def _extract_series_count(payload: dict[str, Any]) -> int:
     constraints = payload.get("data", {}).get("dataConstraints", [])
     if not constraints:
@@ -575,9 +816,6 @@ def _build_dataframe(
     subject_labels: dict[str, str],
     unit_labels: dict[str, str],
     scale_labels: dict[str, str],
-    indicator_unit_labels: dict[str, str],
-    indicator_unit_codes: dict[str, str],
-    indicator_scale_labels: dict[str, str],
 ) -> pd.DataFrame:
     columns = [
         "dataset_version",
@@ -593,6 +831,9 @@ def _build_dataframe(
         "time_period",
         "obs_value",
         "country_update_date",
+        "_time_period_sort",
+        "_time_period_start",
+        "_time_period_end",
     ]
     if csv_frame.empty:
         return pd.DataFrame(columns=columns)
@@ -601,8 +842,10 @@ def _build_dataframe(
     for row in csv_frame.itertuples(index=False):
         row_dict = row._asdict()
         indicator_code = row_dict["INDICATOR"]
-        unit_code = indicator_unit_codes.get(indicator_code, "")
+        unit_code = str(row_dict.get("UNIT", "") or "")
         scale_code = str(row_dict.get("SCALE", "") or "")
+        period = parse_time_period(row_dict.get("TIME_PERIOD"), row_dict.get("FREQUENCY", ""))
+        display_value = period.display_value if period is not None else str(row_dict.get("TIME_PERIOD", "") or "")
         rows.append(
             {
                 "dataset_version": dataset_version,
@@ -611,20 +854,40 @@ def _build_dataframe(
                 "indicator_code": indicator_code,
                 "subject_descriptor": subject_labels[indicator_code],
                 "unit_code": unit_code,
-                "units": unit_labels.get(unit_code, indicator_unit_labels.get(indicator_code, "")),
+                "units": unit_labels.get(unit_code, unit_code),
                 "scale_code": scale_code,
-                "scale": scale_labels.get(scale_code, indicator_scale_labels.get(indicator_code, scale_code)),
+                "scale": scale_labels.get(scale_code, scale_code),
                 "frequency": row_dict["FREQUENCY"],
-                "time_period": int(row_dict["TIME_PERIOD"]),
+                "time_period": display_value,
                 "obs_value": _coerce_value(row_dict["OBS_VALUE"], scale_code=scale_code),
                 "country_update_date": str(row_dict.get("COUNTRY_UPDATE_DATE", "") or ""),
+                "_time_period_sort": period.sort_key if period is not None else f"raw:{display_value}",
+                "_time_period_start": period.start_date if period is not None else pd.NaT,
+                "_time_period_end": period.end_date if period is not None else pd.NaT,
             }
         )
 
     return pd.DataFrame(rows, columns=columns).sort_values(
-        ["country", "subject_descriptor", "units", "scale", "time_period"],
+        ["country", "subject_descriptor", "units", "scale", "_time_period_sort"],
         ignore_index=True,
     )
+
+
+def _filter_dataframe_by_attribute_codes(
+    dataframe: pd.DataFrame,
+    *,
+    unit_codes: list[str],
+    scale_codes: list[str],
+) -> pd.DataFrame:
+    if dataframe.empty:
+        return dataframe
+
+    filtered = dataframe
+    if unit_codes:
+        filtered = filtered[filtered["unit_code"].isin(unit_codes)]
+    if scale_codes:
+        filtered = filtered[filtered["scale_code"].isin(scale_codes)]
+    return filtered.reset_index(drop=True)
 
 
 def _coerce_value(value: Any, *, scale_code: str = "") -> Any:
@@ -635,6 +898,35 @@ def _coerce_value(value: Any, *, scale_code: str = "") -> Any:
     except (TypeError, ValueError):
         return pd.NA
     return _apply_scale(numeric_value, scale_code)
+
+
+def _collect_series_variants(
+    dataframe: pd.DataFrame,
+    indicator_codes: list[str],
+) -> dict[str, list[SeriesVariant]]:
+    variants_by_indicator: dict[str, set[tuple[str, str]]] = {code: set() for code in indicator_codes}
+    if dataframe.empty:
+        return {code: [] for code in indicator_codes}
+
+    for row in dataframe.itertuples(index=False):
+        row_dict = row._asdict()
+        indicator_code = str(row_dict.get("INDICATOR", "") or "")
+        if indicator_code not in variants_by_indicator:
+            continue
+        variants_by_indicator[indicator_code].add(
+            (
+                str(row_dict.get("UNIT", "") or ""),
+                str(row_dict.get("SCALE", "") or ""),
+            )
+        )
+
+    return {
+        code: [
+            SeriesVariant(unit_code=unit_code, scale_code=scale_code)
+            for unit_code, scale_code in sorted(variants)
+        ]
+        for code, variants in variants_by_indicator.items()
+    }
 
 
 def _apply_scale(value: float, scale_code: str) -> float:

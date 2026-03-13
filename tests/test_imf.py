@@ -8,6 +8,7 @@ from weo_tools.imf import (
     AvailabilityLookupError,
     AvailabilityResult,
     ImfWeoClient,
+    parse_time_period,
     _extract_series_count,
     _read_sdmx_dataframe,
     _split_weo_locations,
@@ -125,6 +126,24 @@ def test_fetch_available_frequency_codes_uses_batched_frequency_query(monkeypatc
     assert recorded_keys == ["*.*.*"]
 
 
+def test_fetch_available_frequencies_uses_scoped_query_and_cache(monkeypatch) -> None:
+    client = ImfWeoClient()
+    recorded_keys: list[str] = []
+
+    def fake_fetch(query):
+        recorded_keys.append(query.key)
+        return _availability_payload("FREQUENCY", ["A", "Q"], 2)
+
+    monkeypatch.setattr(client, "_fetch_availability_json", fake_fetch)
+
+    first = client.fetch_available_frequencies(["GBR"], ["NGDPD"])
+    second = client.fetch_available_frequencies(["GBR"], ["NGDPD"])
+
+    assert first == ["A", "Q"]
+    assert second == ["A", "Q"]
+    assert recorded_keys == ["GBR.NGDPD.*"]
+
+
 def test_fetch_available_time_periods_reads_and_caches_sorted_years(monkeypatch) -> None:
     client = ImfWeoClient()
     calls: list[tuple[list[str], list[str], str]] = []
@@ -138,9 +157,33 @@ def test_fetch_available_time_periods_reads_and_caches_sorted_years(monkeypatch)
     first = client.fetch_available_time_periods(["GBR"], ["NGDPD"], "A")
     second = client.fetch_available_time_periods(["GBR"], ["NGDPD"], "A")
 
-    assert first == [2022, 2024]
-    assert second == [2022, 2024]
+    assert [period.display_value for period in first] == [2022, 2024]
+    assert [period.display_value for period in second] == [2022, 2024]
     assert calls == [(["GBR"], ["NGDPD"], "A")]
+
+
+def test_parse_time_period_normalizes_quarter_month_and_day_formats() -> None:
+    quarter = parse_time_period("2024Q1", "Q")
+    month = parse_time_period("2024-03", "M")
+    day = parse_time_period("2024-03-31", "D")
+
+    assert quarter is not None and quarter.display_text == "Q1 2024"
+    assert month is not None and month.display_text == "03.2024"
+    assert day is not None and day.display_text == "31.03.2024"
+
+
+def test_fetch_available_time_periods_normalizes_quarterly_periods(monkeypatch) -> None:
+    client = ImfWeoClient()
+
+    monkeypatch.setattr(
+        client,
+        "_fetch_batched_dataframe",
+        lambda **kwargs: pd.DataFrame({"TIME_PERIOD": ["2024Q4", "2024Q1", "2024Q2"]}),
+    )
+
+    periods = client.fetch_available_time_periods(["GBR"], ["NGDPD"], "Q")
+
+    assert [period.display_text for period in periods] == ["Q1 2024", "Q2 2024", "Q4 2024"]
 
 
 def test_extract_series_count_reads_annotation_title() -> None:
@@ -308,18 +351,6 @@ def test_fetch_dataframe_splits_invalid_url_batches_and_combines_results(monkeyp
         },
         unit_labels={"USD": "U.S. dollars"},
         scale_labels={"9": "Billions"},
-        indicator_unit_labels={
-            "NGDP": "U.S. dollars",
-            "NGDPD": "U.S. dollars",
-        },
-        indicator_unit_codes={
-            "NGDP": "USD",
-            "NGDPD": "USD",
-        },
-        indicator_scale_labels={
-            "NGDP": "Billions",
-            "NGDPD": "Billions",
-        },
     )
 
     assert len(service.keys) > 1
