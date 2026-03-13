@@ -48,18 +48,28 @@ class SearchableMultiSelect:
         self.selected = {choice.value for choice in choices if choice.checked}
         self.cursor = 0
         self.error_message = ""
+        self.search_focus_on_click = True
 
-        self.search = TextArea(prompt="Search: ", multiline=False, wrap_lines=False)
+        self.search = TextArea(
+            prompt="Search: ",
+            multiline=False,
+            wrap_lines=False,
+            focus_on_click=self.search_focus_on_click,
+        )
         self.search.buffer.on_text_changed += self._reset_cursor
         self.list_control = FormattedTextControl(self._render_choices, focusable=True)
         self.list_window = Window(
             content=self.list_control,
             wrap_lines=False,
             always_hide_cursor=True,
-            height=Dimension(min=10, max=18),
+            height=Dimension(min=10),
             right_margins=[ScrollbarMargin(display_arrows=True)],
         )
         self.error_control = FormattedTextControl(self._render_error)
+        self.title_window = self._build_title_window()
+        self.search_frame = self._build_search_frame()
+        self.matches_frame = self._build_matches_frame()
+        self.error_window = self._build_error_window()
         self.style = Style.from_dict(
             {
                 "title": "bold",
@@ -73,25 +83,7 @@ class SearchableMultiSelect:
 
     def run(self) -> list[str]:
         bindings = self._bindings()
-        root = HSplit(
-            [
-                Window(
-                    content=FormattedTextControl(
-                        [
-                            ("class:title", self.title),
-                            ("", f"\n{self._instructions()}"),
-                        ]
-                    ),
-                    height=2,
-                ),
-                Frame(self.search),
-                Frame(self.list_window, title="Matches"),
-                ConditionalContainer(
-                    Window(content=self.error_control, height=1),
-                    filter=Condition(lambda: bool(self.error_message)),
-                ),
-            ]
-        )
+        root = self._build_root_container()
         application = Application(
             layout=Layout(root, focused_element=self.search),
             key_bindings=bindings,
@@ -103,6 +95,39 @@ class SearchableMultiSelect:
         if result is None:
             raise KeyboardInterrupt("Selection cancelled.")
         return result
+
+    def _build_title_window(self) -> Window:
+        return Window(
+            content=FormattedTextControl(
+                [
+                    ("class:title", self.title),
+                    ("", f"\n{self._instructions()}"),
+                ]
+            ),
+            height=2,
+        )
+
+    def _build_search_frame(self) -> Frame:
+        return Frame(self.search, title="Search")
+
+    def _build_matches_frame(self) -> Frame:
+        return Frame(self.list_window, title="Matches")
+
+    def _build_error_window(self) -> ConditionalContainer:
+        return ConditionalContainer(
+            Window(content=self.error_control, height=1),
+            filter=Condition(lambda: bool(self.error_message)),
+        )
+
+    def _build_root_container(self) -> HSplit:
+        return HSplit(
+            [
+                self.title_window,
+                self.search_frame,
+                self.matches_frame,
+                self.error_window,
+            ]
+        )
 
     def _instructions(self) -> str:
         if self.max_selections == 1:

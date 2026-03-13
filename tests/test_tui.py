@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from prompt_toolkit.layout.containers import ConditionalContainer
+from prompt_toolkit.widgets import Frame
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 
@@ -67,6 +69,18 @@ def test_searchable_multiselect_preserves_selected_values() -> None:
     assert prompt._selected_values() == ["usd"]
 
 
+def test_searchable_multiselect_search_field_is_click_focusable() -> None:
+    prompt = SearchableMultiSelect(
+        "Select countries",
+        [
+            Choice(name="United Kingdom [GBR]", value="GBR"),
+        ],
+    )
+
+    assert prompt.search_focus_on_click is True
+    assert isinstance(prompt.search_frame, Frame)
+
+
 def test_searchable_multiselect_instructions_include_visible_bulk_actions() -> None:
     prompt = SearchableMultiSelect(
         "Select countries",
@@ -111,6 +125,21 @@ def test_render_choices_marks_active_row_for_scrolling() -> None:
 
     assert any(fragment[0] == "[SetCursorPosition]" for fragment in rows[1])
     assert any(fragment[0] == "class:active" for fragment in rows[1] if fragment[1])
+
+
+def test_searchable_multiselect_builds_named_layout_sections() -> None:
+    prompt = SearchableMultiSelect(
+        "Select countries",
+        [
+            Choice(name="United Kingdom [GBR]", value="GBR"),
+        ],
+    )
+    root = prompt._build_root_container()
+
+    assert root.children[0] is prompt.title_window
+    assert root.children[-1] is prompt.error_window
+    assert isinstance(prompt.matches_frame, Frame)
+    assert isinstance(prompt.error_window, ConditionalContainer)
 
 
 def test_render_choices_includes_detail_suffix() -> None:
@@ -198,6 +227,18 @@ def test_mouse_wheel_moves_cursor_within_bounds() -> None:
 
     handler(_mouse_event(MouseEventType.SCROLL_UP, y=0, button=MouseButton.NONE))
     assert prompt.cursor == 1
+
+
+def test_matches_window_uses_terminal_height_without_fixed_max() -> None:
+    prompt = SearchableMultiSelect(
+        "Select countries",
+        [
+            Choice(name="United Kingdom [GBR]", value="GBR"),
+        ],
+    )
+
+    assert prompt.list_window.height.min == 10
+    assert prompt.list_window.height.max > 1000
 
 
 def test_no_matches_disables_cursor_movement() -> None:

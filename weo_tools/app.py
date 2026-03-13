@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,7 @@ import pandas as pd
 from .configuration import RuntimeSettings
 from .imf import AvailabilityAggregate, AvailabilityResult, Catalog, ImfWeoClient
 from .legacy import AliasConfig, LegacyCatalog, load_alias_config, load_legacy_catalog, normalize_label
+from .regions import DEFAULT_REGION_MEMBERSHIP_PATH, RegionMembership, load_region_membership
 from .tui import prompt_for_choice, prompt_for_choices, run_with_status
 
 
@@ -76,9 +78,19 @@ def load_weo_dataframe(
 def run_dataframe(settings: RuntimeSettings, client: ImfWeoClient | None = None) -> pd.DataFrame:
     active_client = client or ImfWeoClient()
     catalog = run_with_status("Loading IMF WEO catalog...", active_client.fetch_catalog)
+    region_membership = _load_region_membership(catalog)
+    frequency = _resolve_frequency_code(settings, catalog, active_client)
     aliases = load_alias_config(settings.alias_file)
     legacy = load_legacy_catalog(settings.compatibility_workbook)
-    selections = _resolve_selections(settings, catalog, legacy, aliases, active_client)
+    selections = _resolve_selections(
+        settings,
+        catalog,
+        legacy,
+        aliases,
+        region_membership,
+        active_client,
+        frequency,
+    )
 
     dataframe = run_with_status(
         "Fetching WEO data...",
@@ -87,7 +99,7 @@ def run_dataframe(settings: RuntimeSettings, client: ImfWeoClient | None = None)
         indicator_codes=selections.indicator_codes,
         unit_codes=selections.unit_codes,
         scale_codes=selections.scale_codes,
-        frequency=settings.frequency,
+        frequency=frequency,
         start_year=settings.start_year,
         end_year=settings.end_year,
         subject_labels=selections.subject_labels,
@@ -103,11 +115,10 @@ def run_dataframe(settings: RuntimeSettings, client: ImfWeoClient | None = None)
 
 def run_excel_export(settings: RuntimeSettings, client: ImfWeoClient | None = None) -> Path:
     dataframe = run_dataframe(settings, client)
-    output_path = Path(settings.output_path or "output/weo_export.xlsx")
+    output_path = _resolve_output_path(settings, dataframe, suffix=".xlsx")
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    wide = _normalize_excel_numeric_frame(pivot_for_excel(dataframe))
-    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
-        wide.to_excel(writer, sheet_name="WEO Data", index=False)
+    wide = _normalize_excel_frame(pivot_for_excel(dataframe))
+    _write_excel_frame(output_path, wide, sheet_name="WEO Data")
     return output_path
 
 
@@ -122,7 +133,7 @@ def save_dataframe(dataframe: pd.DataFrame, output_path: str | Path) -> Path:
     elif suffix in {".pkl", ".pickle"}:
         dataframe.to_pickle(path)
     elif suffix == ".xlsx":
-        _normalize_excel_numeric_frame(dataframe).to_excel(path, index=False)
+        _write_excel_frame(path, _normalize_excel_frame(dataframe), sheet_name="Sheet1")
     else:
         raise ValueError(f"Unsupported dataframe output format: {path.suffix}")
     return path
@@ -159,9 +170,19 @@ def _resolve_selections(
     catalog: Catalog,
     legacy: LegacyCatalog,
     aliases: AliasConfig,
+    region_membership: RegionMembership,
     client: ImfWeoClient,
+    frequency: str,
 ) -> ResolvedSelections:
-    core_state = _resolve_primary_selection_state(settings, catalog, legacy, aliases, client)
+    core_state = _resolve_primary_selection_state(
+        settings,
+        catalog,
+        legacy,
+        aliases,
+        region_membership,
+        client,
+        frequency,
+    )
     filter_state = _resolve_unit_scale_filters(settings, core_state.indicator_codes, legacy)
     return _build_resolved_selections(
         country_codes=core_state.country_codes,
@@ -178,7 +199,9 @@ def _resolve_primary_selection_state(
     catalog: Catalog,
     legacy: LegacyCatalog,
     aliases: AliasConfig,
+    region_membership: RegionMembership,
     client: ImfWeoClient,
+    frequency: str,
 ) -> CoreSelectionState:
     selection_order = _selection_order_for_settings(settings)
     if selection_order is None:
@@ -192,7 +215,9 @@ def _resolve_primary_selection_state(
             catalog,
             legacy,
             aliases,
+            region_membership,
             client,
+            frequency,
             selected_countries=selected_countries,
             selected_subjects=selected_subjects,
         )
@@ -201,7 +226,9 @@ def _resolve_primary_selection_state(
         catalog,
         legacy,
         aliases,
+        region_membership,
         client,
+        frequency,
         selected_countries=selected_countries,
         selected_subjects=selected_subjects,
     )
@@ -227,28 +254,81 @@ def _prompt_for_selection_order() -> str:
     )
 
 
+def _load_region_membership(catalog: Catalog) -> RegionMembership:
+    return load_region_membership(
+        DEFAULT_REGION_MEMBERSHIP_PATH,
+        valid_region_codes=set(catalog.country_groups),
+        valid_country_codes=set(catalog.countries),
+    )
+
+
+def _resolve_frequency_code(settings: RuntimeSettings, catalog: Catalog, client: ImfWeoClient) -> str:
+    available_frequency_codes = _fetch_available_frequency_codes(client)
+    if not available_frequency_codes:
+        raise ValueError("No frequencies are available for IMF WEO.")
+
+    requested_frequency = str(settings.frequency or "").strip().upper()
+    if requested_frequency:
+        if requested_frequency not in available_frequency_codes:
+            available = ", ".join(available_frequency_codes)
+            raise ValueError(
+                f"Frequency '{requested_frequency}' is not available for IMF WEO. "
+                f"Available frequencies: {available}."
+            )
+        return requested_frequency
+
+    if settings.interactive:
+        return _prompt_for_frequency(catalog, available_frequency_codes)
+    return available_frequency_codes[0]
+
+
+def _prompt_for_frequency(catalog: Catalog, available_frequency_codes: list[str]) -> str:
+    if len(available_frequency_codes) == 1:
+        return available_frequency_codes[0]
+    return prompt_for_choice(
+        "Select frequency",
+        [
+            {
+                "name": f"{catalog.frequencies.get(code, code)} [{code}]",
+                "value": code,
+            }
+            for code in available_frequency_codes
+        ],
+    )
+
+
 def _resolve_country_first_selection(
     settings: RuntimeSettings,
     catalog: Catalog,
     legacy: LegacyCatalog,
     aliases: AliasConfig,
+    region_membership: RegionMembership,
     client: ImfWeoClient,
+    frequency: str,
     *,
     selected_countries: list[str],
     selected_subjects: list[str],
 ) -> CoreSelectionState:
     if settings.interactive and not selected_countries:
-        available_location_codes = _fetch_available_location_codes(client, settings.frequency)
-        available_country_codes, available_group_codes = _split_available_location_codes(
-            catalog,
-            available_location_codes,
-        )
+        available_country_codes = _available_country_codes(catalog, _fetch_available_location_codes(client, frequency))
         country_totals = _fetch_indicator_availability(
             client,
             available_country_codes,
-            settings.frequency,
+            frequency,
             strict=False,
             status_message="Checking country availability...",
+        )
+        available_country_codes = [
+            result.requested_code for result in country_totals.results if result.series_count > 0
+        ]
+        selected_region_codes = _prompt_for_region_codes_for_countries(
+            catalog,
+            region_membership,
+            available_country_codes=available_country_codes,
+        )
+        preselected_country_codes = region_membership.expand_region_codes(
+            selected_region_codes,
+            allowed_country_codes=available_country_codes,
         )
         selected_country_codes = _prompt_for_country_codes(
             "Select countries",
@@ -256,31 +336,17 @@ def _resolve_country_first_selection(
             legacy,
             available_country_codes=available_country_codes,
             detail_by_code=_build_total_count_details(country_totals.results, "indicator"),
-            required=False,
+            preselected=preselected_country_codes,
+            required=True,
         )
-        group_totals = _fetch_indicator_availability(
-            client,
-            available_group_codes,
-            settings.frequency,
-            strict=False,
-            status_message="Checking country group availability...",
-        )
-        selected_group_codes = _prompt_for_country_group_codes(
-            "Select country groups",
-            catalog,
-            legacy,
-            available_group_codes=available_group_codes,
-            detail_by_code=_build_total_count_details(group_totals.results, "indicator"),
-            required=False,
-        )
-        selected_countries = selected_country_codes + selected_group_codes
+        selected_countries = selected_country_codes
     if not selected_countries:
-        raise ValueError("At least one country or country group selector is required.")
+        raise ValueError("At least one country or region selector is required.")
 
-    country_codes = _resolve_country_codes(selected_countries, catalog, legacy, aliases)
-    indicator_availability = _fetch_indicator_availability(client, country_codes, settings.frequency)
+    country_codes = _resolve_country_codes(selected_countries, catalog, legacy, aliases, region_membership)
+    indicator_availability = _fetch_indicator_availability(client, country_codes, frequency)
     if not indicator_availability.available_codes:
-        raise ValueError("No indicators are available for the selected countries or country groups and frequency.")
+        raise ValueError("No indicators are available for the selected countries and frequency.")
 
     if settings.interactive and not selected_subjects:
         selected_subjects = _prompt_for_indicator_codes(
@@ -300,7 +366,7 @@ def _resolve_country_first_selection(
     indicator_codes = _resolve_indicator_codes(selected_subjects, catalog, legacy, aliases)
     indicator_codes = _restrict_codes(indicator_codes, indicator_availability.available_codes)
     if not indicator_codes:
-        raise ValueError("No matching indicators are available for the selected countries or country groups.")
+        raise ValueError("No matching indicators are available for the selected countries.")
 
     return CoreSelectionState(country_codes=country_codes, indicator_codes=indicator_codes)
 
@@ -310,17 +376,19 @@ def _resolve_indicator_first_selection(
     catalog: Catalog,
     legacy: LegacyCatalog,
     aliases: AliasConfig,
+    region_membership: RegionMembership,
     client: ImfWeoClient,
+    frequency: str,
     *,
     selected_countries: list[str],
     selected_subjects: list[str],
 ) -> CoreSelectionState:
     if settings.interactive and not selected_subjects:
-        available_indicator_codes = _fetch_available_indicator_catalog_codes(client, settings.frequency)
+        available_indicator_codes = _fetch_available_indicator_catalog_codes(client, frequency)
         indicator_totals = _fetch_country_availability(
             client,
             available_indicator_codes,
-            settings.frequency,
+            frequency,
             strict=False,
             status_message="Checking subject availability...",
         )
@@ -335,14 +403,20 @@ def _resolve_indicator_first_selection(
         raise ValueError("At least one subject descriptor selector is required.")
 
     indicator_codes = _resolve_indicator_codes(selected_subjects, catalog, legacy, aliases)
-    country_availability = _fetch_country_availability(client, indicator_codes, settings.frequency)
-    if not country_availability.available_codes:
-        raise ValueError("No countries or country groups are available for the selected subject descriptors and frequency.")
+    country_availability = _fetch_country_availability(client, indicator_codes, frequency)
+    available_country_codes = _available_country_codes(catalog, country_availability.available_codes)
+    if not available_country_codes:
+        raise ValueError("No countries are available for the selected subject descriptors and frequency.")
 
     if settings.interactive and not selected_countries:
-        available_country_codes, available_group_codes = _split_available_location_codes(
+        selected_region_codes = _prompt_for_region_codes_for_countries(
             catalog,
-            country_availability.available_codes,
+            region_membership,
+            available_country_codes=available_country_codes,
+        )
+        preselected_country_codes = region_membership.expand_region_codes(
+            selected_region_codes,
+            allowed_country_codes=available_country_codes,
         )
         selected_country_codes = _prompt_for_country_codes(
             "Select countries",
@@ -354,28 +428,17 @@ def _resolve_indicator_first_selection(
                 len(indicator_codes),
                 "subject",
             ),
-            required=False,
+            preselected=preselected_country_codes,
+            required=True,
         )
-        selected_group_codes = _prompt_for_country_group_codes(
-            "Select country groups",
-            catalog,
-            legacy,
-            available_group_codes=available_group_codes,
-            detail_by_code=_build_ratio_count_details(
-                _filter_count_map(country_availability.counts_by_code, available_group_codes),
-                len(indicator_codes),
-                "subject",
-            ),
-            required=False,
-        )
-        selected_countries = selected_country_codes + selected_group_codes
+        selected_countries = selected_country_codes
     if not selected_countries:
-        raise ValueError("At least one country or country group selector is required.")
+        raise ValueError("At least one country or region selector is required.")
 
-    country_codes = _resolve_country_codes(selected_countries, catalog, legacy, aliases)
-    country_codes = _restrict_codes(country_codes, country_availability.available_codes)
+    country_codes = _resolve_country_codes(selected_countries, catalog, legacy, aliases, region_membership)
+    country_codes = _restrict_codes(country_codes, available_country_codes)
     if not country_codes:
-        raise ValueError("No matching countries or country groups are available for the selected subject descriptors.")
+        raise ValueError("No matching countries are available for the selected subject descriptors.")
 
     return CoreSelectionState(country_codes=country_codes, indicator_codes=indicator_codes)
 
@@ -388,33 +451,88 @@ def _resolve_unit_scale_filters(
     selected_units = list(settings.units)
     selected_scales = list(settings.scales)
 
-    if settings.interactive and not selected_units:
-        available_units = _available_legacy_labels(
-            _filter_indicator_codes(indicator_codes, [], selected_scales, legacy),
-            legacy.indicator_units,
-        )
-        selected_units = _resolve_optional_labels("Select units", available_units)
-
     filtered_indicator_codes = _filter_indicator_codes(indicator_codes, selected_units, selected_scales, legacy)
     if not filtered_indicator_codes:
         raise ValueError("No WEO series match the selected Subject Descriptor, Units, and Scale combination.")
+
+    if settings.interactive and not selected_units:
+        filtered_indicator_codes, prompted_units = _resolve_contextual_legacy_filters(
+            filtered_indicator_codes,
+            legacy,
+            dimension_name="units",
+            label_map=legacy.indicator_units,
+        )
+        selected_units.extend(prompted_units)
 
     if settings.interactive and not selected_scales:
-        available_scales = _available_legacy_labels(
-            _filter_indicator_codes(indicator_codes, selected_units, [], legacy),
-            legacy.indicator_scales,
+        filtered_indicator_codes, prompted_scales = _resolve_contextual_legacy_filters(
+            filtered_indicator_codes,
+            legacy,
+            dimension_name="scales",
+            label_map=legacy.indicator_scales,
         )
-        selected_scales = _resolve_optional_labels("Select scales", available_scales)
-
-    filtered_indicator_codes = _filter_indicator_codes(indicator_codes, selected_units, selected_scales, legacy)
-    if not filtered_indicator_codes:
-        raise ValueError("No WEO series match the selected Subject Descriptor, Units, and Scale combination.")
+        selected_scales.extend(prompted_scales)
 
     return FilterSelectionState(
         indicator_codes=filtered_indicator_codes,
         selected_units=selected_units,
         selected_scales=selected_scales,
     )
+
+
+def _resolve_contextual_legacy_filters(
+    indicator_codes: list[str],
+    legacy: LegacyCatalog,
+    *,
+    dimension_name: str,
+    label_map: dict[str, set[str]],
+) -> tuple[list[str], list[str]]:
+    filtered_codes: list[str] = []
+    prompted_labels: list[str] = []
+    for subject_label, subject_codes in _group_indicator_codes_by_subject(indicator_codes, legacy):
+        choices = _available_legacy_labels(subject_codes, label_map)
+        selected_labels: list[str] = []
+        if _subject_requires_prompt(subject_codes, label_map) and choices:
+            selected_labels = _resolve_optional_labels(
+                f"Select {dimension_name} for {subject_label}",
+                choices,
+            )
+            prompted_labels.extend(selected_labels)
+        matching_codes = _filter_indicator_codes(
+            subject_codes,
+            selected_labels if dimension_name == "units" else [],
+            selected_labels if dimension_name == "scales" else [],
+            legacy,
+        )
+        if not matching_codes:
+            raise ValueError("No WEO series match the selected Subject Descriptor, Units, and Scale combination.")
+        for code in matching_codes:
+            if code not in filtered_codes:
+                filtered_codes.append(code)
+    return filtered_codes, prompted_labels
+
+
+def _group_indicator_codes_by_subject(
+    indicator_codes: list[str],
+    legacy: LegacyCatalog,
+) -> list[tuple[str, list[str]]]:
+    grouped: dict[str, list[str]] = {}
+    for code in indicator_codes:
+        subject_label = legacy.preferred_subject_labels.get(code, code)
+        grouped.setdefault(subject_label, []).append(code)
+    return list(grouped.items())
+
+
+def _subject_requires_prompt(indicator_codes: list[str], label_map: dict[str, set[str]]) -> bool:
+    subject_labels = [_non_empty_legacy_labels(label_map.get(code, set())) for code in indicator_codes]
+    if any(len(labels) > 1 for labels in subject_labels):
+        return True
+    distinct_labels = {next(iter(labels)) for labels in subject_labels if len(labels) == 1}
+    return len(distinct_labels) > 1 and len(indicator_codes) > 1
+
+
+def _non_empty_legacy_labels(labels: set[str]) -> set[str]:
+    return {label for label in labels if label}
 
 
 def _build_resolved_selections(
@@ -515,6 +633,13 @@ def _fetch_available_location_codes(client: ImfWeoClient, frequency: str) -> lis
     )
 
 
+def _fetch_available_frequency_codes(client: ImfWeoClient) -> list[str]:
+    return run_with_status(
+        "Checking available frequencies...",
+        client.fetch_available_frequency_codes,
+    )
+
+
 def _fetch_available_indicator_catalog_codes(client: ImfWeoClient, frequency: str) -> list[str]:
     return run_with_status(
         "Checking available subjects...",
@@ -523,20 +648,27 @@ def _fetch_available_indicator_catalog_codes(client: ImfWeoClient, frequency: st
     )
 
 
+def _available_country_codes(catalog: Catalog, available_location_codes: list[str]) -> list[str]:
+    available = set(available_location_codes)
+    return [code for code in catalog.countries if code in available]
+
+
 def _resolve_country_codes(
     requested: list[str],
     catalog: Catalog,
     legacy: LegacyCatalog,
     aliases: AliasConfig,
+    region_membership: RegionMembership,
 ) -> list[str]:
-    return _resolve_codes(
+    location_codes = _resolve_codes(
         requested=requested,
         current_labels=catalog.locations,
         preferred_labels=legacy.preferred_country_labels,
         workbook_aliases=legacy.country_aliases,
         manual_aliases=aliases.countries,
-        entity_name="country",
+        entity_name="country or region",
     )
+    return _expand_location_codes(location_codes, catalog, region_membership)
 
 
 def _resolve_indicator_codes(
@@ -561,6 +693,7 @@ def _prompt_for_country_codes(
     catalog: Catalog,
     legacy: LegacyCatalog,
     available_country_codes: list[str] | None = None,
+    preselected: list[str] | None = None,
     detail_by_code: dict[str, str] | None = None,
     required: bool = True,
 ) -> list[str]:
@@ -571,38 +704,51 @@ def _prompt_for_country_codes(
             codes,
             catalog.countries,
             legacy.preferred_country_labels,
+            preselected=preselected,
             detail_by_code=detail_by_code,
         ),
         required=required,
     )
 
 
-def _prompt_for_country_group_codes(
+def _prompt_for_region_codes(
     prompt: str,
     catalog: Catalog,
-    legacy: LegacyCatalog,
-    available_group_codes: list[str] | None = None,
+    available_region_codes: list[str],
     detail_by_code: dict[str, str] | None = None,
     required: bool = True,
 ) -> list[str]:
-    codes = available_group_codes or list(catalog.country_groups.keys())
     return _prompt_for_codes(
         prompt,
         _build_choice_map_for_codes(
-            codes,
+            available_region_codes,
             catalog.country_groups,
-            legacy.preferred_country_labels,
+            catalog.country_groups,
             detail_by_code=detail_by_code,
         ),
         required=required,
     )
 
 
-def _split_available_location_codes(catalog: Catalog, available_location_codes: list[str]) -> tuple[list[str], list[str]]:
-    available = set(available_location_codes)
-    return (
-        [code for code in catalog.countries if code in available],
-        [code for code in catalog.country_groups if code in available],
+def _prompt_for_region_codes_for_countries(
+    catalog: Catalog,
+    region_membership: RegionMembership,
+    *,
+    available_country_codes: list[str],
+) -> list[str]:
+    available_region_codes = region_membership.available_region_codes(available_country_codes)
+    if not available_region_codes:
+        return []
+    return _prompt_for_region_codes(
+        "Select regions",
+        catalog,
+        available_region_codes,
+        detail_by_code=_build_region_country_count_details(
+            region_membership,
+            available_region_codes,
+            available_country_codes,
+        ),
+        required=False,
     )
 
 
@@ -627,9 +773,44 @@ def _prompt_for_indicator_codes(
     )
 
 
+def _expand_location_codes(
+    location_codes: list[str],
+    catalog: Catalog,
+    region_membership: RegionMembership,
+) -> list[str]:
+    expanded: list[str] = []
+    seen: set[str] = set()
+    for code in location_codes:
+        if code in catalog.countries:
+            if code not in seen:
+                seen.add(code)
+                expanded.append(code)
+            continue
+        region_members = region_membership.members_by_region.get(code)
+        if region_members is None:
+            raise ValueError(f"Region membership is not configured for {catalog.locations.get(code, code)} [{code}].")
+        for member in region_members:
+            if member in seen:
+                continue
+            seen.add(member)
+            expanded.append(member)
+    return expanded
+
+
 def _restrict_codes(resolved_codes: list[str], available_codes: list[str]) -> list[str]:
     available = set(available_codes)
     return [code for code in resolved_codes if code in available]
+
+
+def _build_region_country_count_details(
+    region_membership: RegionMembership,
+    region_codes: list[str],
+    available_country_codes: list[str],
+) -> dict[str, str]:
+    return {
+        code: f"{region_membership.count_countries(code, allowed_country_codes=available_country_codes)} countries"
+        for code in region_codes
+    }
 
 
 def _resolve_codes(
@@ -856,10 +1037,92 @@ def _pluralize(noun: str, count: int) -> str:
     return noun if count == 1 else f"{noun}s"
 
 
-def _normalize_excel_numeric_frame(dataframe: pd.DataFrame) -> pd.DataFrame:
+def _resolve_output_path(settings: RuntimeSettings, dataframe: pd.DataFrame, *, suffix: str) -> Path:
+    if settings.output_path:
+        return Path(settings.output_path)
+    output_dir = Path("output")
+    stem = _build_output_stem(settings, dataframe)
+    return _ensure_unique_output_path(output_dir / f"{stem}{suffix}")
+
+
+def _build_output_stem(settings: RuntimeSettings, dataframe: pd.DataFrame) -> str:
+    country_fragment = _output_fragment(
+        _frame_values(dataframe, "Country"),
+        fallback_values=settings.countries,
+        fallback="countries",
+    )
+    indicator_fragment = _output_fragment(
+        _frame_values(dataframe, "Subject Descriptor"),
+        fallback_values=settings.subject_descriptors,
+        fallback="indicators",
+    )
+    frequency_fragment = _output_fragment(
+        _frame_values(dataframe, "frequency"),
+        fallback_values=[settings.frequency] if settings.frequency else [],
+        fallback="data",
+    )
+    stem = f"weo_{country_fragment}_{indicator_fragment}_{frequency_fragment}"
+    return stem[:120].rstrip("-_") or "weo_export"
+
+
+def _frame_values(dataframe: pd.DataFrame, column_name: str) -> list[str]:
+    if column_name not in dataframe.columns:
+        return []
+    values = dataframe[column_name].dropna().astype(str).tolist()
+    unique_values: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = value.strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        unique_values.append(normalized)
+    return unique_values
+
+
+def _output_fragment(values: list[str], *, fallback_values: list[str], fallback: str) -> str:
+    candidates = values or [value for value in fallback_values if str(value).strip()]
+    if not candidates:
+        return fallback
+    primary = _slugify_output_value(candidates[0], fallback=fallback)
+    if len(candidates) == 1:
+        return primary
+    return f"{primary}-plus-{len(candidates) - 1}"
+
+
+def _slugify_output_value(value: str, *, fallback: str) -> str:
+    compact = normalize_label(value).replace(" ", "-")
+    return compact[:48].strip("-") or fallback
+
+
+def _ensure_unique_output_path(path: Path) -> Path:
+    if not path.exists():
+        return path
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    candidate = path.with_stem(f"{path.stem}_{timestamp}")
+    counter = 1
+    while candidate.exists():
+        counter += 1
+        candidate = path.with_stem(f"{path.stem}_{timestamp}_{counter}")
+    return candidate
+
+
+def _write_excel_frame(path: Path, dataframe: pd.DataFrame, *, sheet_name: str) -> None:
+    with pd.ExcelWriter(
+        path,
+        engine="openpyxl",
+        date_format="YYYY-MM-DD",
+        datetime_format="YYYY-MM-DD",
+    ) as writer:
+        dataframe.to_excel(writer, sheet_name=sheet_name, index=False)
+
+
+def _normalize_excel_frame(dataframe: pd.DataFrame) -> pd.DataFrame:
     normalized = dataframe.copy()
     for column in normalized.columns:
-        if _should_normalize_excel_column(column, normalized[column]):
+        if _should_normalize_excel_date_column(column, normalized[column]):
+            normalized[column] = _coerce_excel_date_series(normalized[column])
+        elif _should_normalize_excel_column(column, normalized[column]):
             normalized[column] = _coerce_excel_numeric_series(normalized[column])
     return normalized
 
@@ -877,6 +1140,19 @@ def _should_normalize_excel_column(column: Any, series: pd.Series) -> bool:
     return bool(converted.notna().all())
 
 
+def _should_normalize_excel_date_column(column: Any, series: pd.Series) -> bool:
+    column_name = str(column)
+    if "date" not in normalize_label(column_name):
+        return False
+    if not pd.api.types.is_object_dtype(series.dtype) and not pd.api.types.is_string_dtype(series.dtype):
+        return False
+    non_empty = series.replace("", pd.NA).dropna()
+    if non_empty.empty:
+        return False
+    converted = pd.to_datetime(non_empty, errors="coerce")
+    return bool(converted.notna().all())
+
+
 def _coerce_excel_numeric_series(series: pd.Series) -> pd.Series:
     cleaned = series.replace("", pd.NA)
     converted = pd.to_numeric(cleaned, errors="coerce")
@@ -886,3 +1162,8 @@ def _coerce_excel_numeric_series(series: pd.Series) -> pd.Series:
     if ((non_null % 1) == 0).all():
         return converted.astype("Int64")
     return converted.astype("Float64")
+
+
+def _coerce_excel_date_series(series: pd.Series) -> pd.Series:
+    cleaned = series.replace("", pd.NA)
+    return pd.to_datetime(cleaned, errors="coerce")

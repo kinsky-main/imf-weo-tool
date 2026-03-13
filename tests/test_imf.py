@@ -109,6 +109,22 @@ def test_fetch_available_indicator_catalog_codes_uses_batched_indicator_query(mo
     assert recorded_keys == ["*.*.A"]
 
 
+def test_fetch_available_frequency_codes_uses_batched_frequency_query(monkeypatch) -> None:
+    client = ImfWeoClient()
+    recorded_keys: list[str] = []
+
+    def fake_fetch(query):
+        recorded_keys.append(query.key)
+        return _availability_payload("FREQUENCY", ["A", "Q"], 2)
+
+    monkeypatch.setattr(client, "_fetch_availability_json", fake_fetch)
+
+    result = client.fetch_available_frequency_codes()
+
+    assert result == ["A", "Q"]
+    assert recorded_keys == ["*.*.*"]
+
+
 def test_extract_series_count_reads_annotation_title() -> None:
     payload = _availability_payload("COUNTRY", ["GBR"], 44)
 

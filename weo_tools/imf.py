@@ -44,6 +44,7 @@ class Catalog:
     country_groups: dict[str, str]
     locations: dict[str, str]
     indicators: dict[str, str]
+    frequencies: dict[str, str]
     units: dict[str, str]
     scales: dict[str, str]
 
@@ -71,6 +72,7 @@ class AvailabilityLookupError(ValueError):
 class ImfWeoClient:
     def __init__(self) -> None:
         self._catalog: Catalog | None = None
+        self._available_frequency_codes: list[str] | None = None
         self._available_location_codes_by_frequency: dict[str, list[str]] = {}
         self._available_indicator_catalog_codes_by_frequency: dict[str, list[str]] = {}
         self._service = RestService(
@@ -105,6 +107,7 @@ class ImfWeoClient:
         locations = self._fetch_codelist("IMF.RES", "CL_WEO_COUNTRY")
         countries, country_groups = _split_weo_locations(locations)
         indicators = self._fetch_codelist("IMF.RES", "CL_WEO_INDICATOR")
+        frequencies = self._fetch_codelist("IMF", "CL_FREQ")
         units = self._fetch_codelist("IMF", "CL_UNIT")
         scales = self._fetch_codelist("IMF", "CL_UNIT_MULT")
 
@@ -114,10 +117,21 @@ class ImfWeoClient:
             country_groups=country_groups,
             locations=locations,
             indicators=indicators,
+            frequencies=frequencies,
             units=units,
             scales=scales,
         )
         return self._catalog
+
+    def fetch_available_frequency_codes(self) -> list[str]:
+        if self._available_frequency_codes is not None:
+            return list(self._available_frequency_codes)
+        available_codes = self._fetch_batched_available_codes(
+            component_id="FREQUENCY",
+            key="*.*.*",
+        )
+        self._available_frequency_codes = available_codes
+        return list(available_codes)
 
     def fetch_available_location_codes(self, frequency: str) -> list[str]:
         cached = self._available_location_codes_by_frequency.get(frequency)

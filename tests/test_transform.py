@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -19,9 +20,13 @@ class ExcelClient:
             country_groups={},
             locations={"GBR": "United Kingdom"},
             indicators={"NGDPD": "Gross domestic product, current prices"},
+            frequencies={"A": "Annual"},
             units={"USD": "U.S. dollars"},
             scales={"9": "Billions"},
         )
+
+    def fetch_available_frequency_codes(self) -> list[str]:
+        return ["A"]
 
     def fetch_indicator_availability(
         self,
@@ -158,6 +163,25 @@ def test_save_dataframe_writes_numeric_xlsx_cells() -> None:
     assert sheet["B2"].value == 3644.636
 
 
+def test_save_dataframe_writes_excel_date_cells() -> None:
+    dataframe = pd.DataFrame(
+        [
+            {"country_update_date": "9/13/2025", "country": "United Kingdom"},
+            {"country_update_date": "", "country": "Austria"},
+        ]
+    )
+
+    path = save_dataframe(dataframe, _output_path("dates.xlsx"))
+
+    workbook = load_workbook(path)
+    sheet = workbook.active
+
+    assert sheet["A2"].data_type == "d"
+    assert isinstance(sheet["A2"].value, datetime)
+    assert sheet["A2"].value.date().isoformat() == "2025-09-13"
+    assert sheet["A3"].value is None
+
+
 def test_run_excel_export_writes_numeric_year_cells(monkeypatch) -> None:
     settings = RuntimeSettings(
         countries=["GBR"],
@@ -173,6 +197,30 @@ def test_run_excel_export_writes_numeric_year_cells(monkeypatch) -> None:
     workbook = load_workbook(path)
     sheet = workbook["WEO Data"]
 
+    assert path == Path(settings.output_path)
     assert sheet["E2"].data_type == "n"
     assert sheet["F2"].value is None
     assert sheet["E2"].value == 3644.636
+
+
+def test_run_excel_export_generates_informative_unique_filenames(monkeypatch, tmp_path: Path) -> None:
+    settings = RuntimeSettings(
+        countries=["GBR"],
+        subject_descriptors=["NGDPD"],
+        output_path="",
+    )
+    client = ExcelClient()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("weo_tools.app.run_with_status", lambda message, func, /, *args, **kwargs: func(*args, **kwargs))
+
+    first = run_excel_export(settings, client)
+    second = run_excel_export(settings, client)
+
+    assert first.resolve().parent == (tmp_path / "output").resolve()
+    assert "united-kingdom" in first.stem
+    assert "gross-domestic-product-current-prices" in first.stem
+    assert first.stem.endswith("_a")
+    assert first.suffix == ".xlsx"
+    assert second.parent == first.parent
+    assert second != first
