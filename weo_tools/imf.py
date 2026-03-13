@@ -75,6 +75,7 @@ class ImfWeoClient:
         self._available_frequency_codes: list[str] | None = None
         self._available_location_codes_by_frequency: dict[str, list[str]] = {}
         self._available_indicator_catalog_codes_by_frequency: dict[str, list[str]] = {}
+        self._available_time_periods_by_scope: dict[tuple[str, tuple[str, ...], tuple[str, ...]], list[int]] = {}
         self._service = RestService(
             API_BASE,
             ApiVersion.V2_2_2,
@@ -242,6 +243,38 @@ class ImfWeoClient:
         if end_year is not None:
             dataframe = dataframe[dataframe["time_period"] <= end_year]
         return dataframe.reset_index(drop=True)
+
+    def fetch_available_time_periods(
+        self,
+        country_codes: list[str],
+        indicator_codes: list[str],
+        frequency: str,
+    ) -> list[int]:
+        scope = (
+            frequency,
+            tuple(sorted(country_codes)),
+            tuple(sorted(indicator_codes)),
+        )
+        cached = self._available_time_periods_by_scope.get(scope)
+        if cached is not None:
+            return list(cached)
+
+        frame = self._fetch_batched_dataframe(
+            country_codes=country_codes,
+            indicator_codes=indicator_codes,
+            frequency=frequency,
+        )
+        if frame.empty or "TIME_PERIOD" not in frame.columns:
+            periods: list[int] = []
+        else:
+            periods = sorted(
+                {
+                    int(value)
+                    for value in pd.to_numeric(frame["TIME_PERIOD"], errors="coerce").dropna().tolist()
+                }
+            )
+        self._available_time_periods_by_scope[scope] = periods
+        return list(periods)
 
     def _fetch_batched_dataframe(
         self,
@@ -583,7 +616,7 @@ def _build_dataframe(
                 "scale": scale_labels.get(scale_code, indicator_scale_labels.get(indicator_code, scale_code)),
                 "frequency": row_dict["FREQUENCY"],
                 "time_period": int(row_dict["TIME_PERIOD"]),
-                "obs_value": _coerce_value(row_dict["OBS_VALUE"]),
+                "obs_value": _coerce_value(row_dict["OBS_VALUE"], scale_code=scale_code),
                 "country_update_date": str(row_dict.get("COUNTRY_UPDATE_DATE", "") or ""),
             }
         )
@@ -594,10 +627,19 @@ def _build_dataframe(
     )
 
 
-def _coerce_value(value: Any) -> Any:
+def _coerce_value(value: Any, *, scale_code: str = "") -> Any:
     if value in (None, "", "n/a", "N/A"):
         return pd.NA
     try:
-        return float(value)
+        numeric_value = float(value)
     except (TypeError, ValueError):
         return pd.NA
+    return _apply_scale(numeric_value, scale_code)
+
+
+def _apply_scale(value: float, scale_code: str) -> float:
+    try:
+        exponent = int(str(scale_code).strip())
+    except (TypeError, ValueError):
+        return value
+    return value / (10**exponent)

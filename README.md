@@ -53,6 +53,12 @@ Pull a dataframe and write a CSV:
 python weo_to_dataframe.py --country "United Kingdom" --subject-descriptor "Gross domestic product, current prices" --unit "U.S. dollars" --scale Billions --start-year 2020 --end-year 2030 --output output/gbr_ngdpd.csv
 ```
 
+Pull all annual `NGDPD` figures for every available country:
+
+```powershell
+python weo_to_dataframe.py --country "*" --subject-descriptor "Gross domestic product, current prices" --unit "U.S. dollars" --scale Billions --output output/all_ngdpd_a.csv
+```
+
 Export the same selection to Excel:
 
 ```powershell
@@ -70,3 +76,7 @@ TUI for each required selector. Type to filter the list, use `Up`/`Down` to
 move, `Space` to mark items, and press `Enter` to confirm each step. The app
 shows a loading spinner while it checks valid next-step selectors and while it
 fetches the data.
+
+The exported `obs_value` values are normalized to the requested WEO scale. For
+example, a series labeled `Billions` is written as `3644.636`, not
+`3644636000000`.

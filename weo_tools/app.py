@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from calendar import monthrange
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+import re
 from typing import Any
 
 import pandas as pd
@@ -11,7 +13,7 @@ from .configuration import RuntimeSettings
 from .imf import AvailabilityAggregate, AvailabilityResult, Catalog, ImfWeoClient
 from .legacy import AliasConfig, LegacyCatalog, load_alias_config, load_legacy_catalog, normalize_label
 from .regions import DEFAULT_REGION_MEMBERSHIP_PATH, RegionMembership, load_region_membership
-from .tui import prompt_for_choice, prompt_for_choices, run_with_status
+from .tui import interactive_tui_session, prompt_for_choice, prompt_for_choices, run_with_status, set_interactive_summary
 
 
 COUNTRY_FIRST = "country-first"
@@ -76,10 +78,19 @@ def load_weo_dataframe(
 
 
 def run_dataframe(settings: RuntimeSettings, client: ImfWeoClient | None = None) -> pd.DataFrame:
+    if settings.interactive:
+        with interactive_tui_session():
+            return _run_dataframe(settings, client)
+    return _run_dataframe(settings, client)
+
+
+def _run_dataframe(settings: RuntimeSettings, client: ImfWeoClient | None = None) -> pd.DataFrame:
     active_client = client or ImfWeoClient()
     catalog = run_with_status("Loading IMF WEO catalog...", active_client.fetch_catalog)
     region_membership = _load_region_membership(catalog)
     frequency = _resolve_frequency_code(settings, catalog, active_client)
+    settings.frequency = frequency
+    _update_interactive_summary(settings)
     aliases = load_alias_config(settings.alias_file)
     legacy = load_legacy_catalog(settings.compatibility_workbook)
     selections = _resolve_selections(
@@ -91,6 +102,17 @@ def run_dataframe(settings: RuntimeSettings, client: ImfWeoClient | None = None)
         active_client,
         frequency,
     )
+    _update_interactive_summary(settings, selections=selections)
+    start_year, end_year = _resolve_date_range(
+        settings,
+        active_client,
+        selections.country_codes,
+        selections.indicator_codes,
+        frequency,
+    )
+    settings.start_year = start_year
+    settings.end_year = end_year
+    _update_interactive_summary(settings, selections=selections)
 
     dataframe = run_with_status(
         "Fetching WEO data...",
@@ -100,8 +122,8 @@ def run_dataframe(settings: RuntimeSettings, client: ImfWeoClient | None = None)
         unit_codes=selections.unit_codes,
         scale_codes=selections.scale_codes,
         frequency=frequency,
-        start_year=settings.start_year,
-        end_year=settings.end_year,
+        start_year=start_year,
+        end_year=end_year,
         subject_labels=selections.subject_labels,
         country_labels=selections.country_labels,
         unit_labels=selections.unit_labels,
@@ -118,7 +140,13 @@ def run_excel_export(settings: RuntimeSettings, client: ImfWeoClient | None = No
     output_path = _resolve_output_path(settings, dataframe, suffix=".xlsx")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     wide = _normalize_excel_frame(pivot_for_excel(dataframe))
-    _write_excel_frame(output_path, wide, sheet_name="WEO Data")
+    _write_excel_frame(
+        output_path,
+        wide,
+        sheet_name="WEO Data",
+        header_frequency=settings.frequency,
+        fixed_header_columns=4,
+    )
     return output_path
 
 
@@ -297,6 +325,87 @@ def _prompt_for_frequency(catalog: Catalog, available_frequency_codes: list[str]
     )
 
 
+def _update_interactive_summary(
+    settings: RuntimeSettings,
+    *,
+    selections: ResolvedSelections | None = None,
+) -> None:
+    if not settings.interactive:
+        return
+
+    lines: list[str] = []
+    if settings.frequency:
+        lines.append(f"Frequency: {settings.frequency}")
+    if selections is not None:
+        lines.append(f"Countries: {len(selections.country_codes)} selected")
+        lines.append(f"Subjects: {len(selections.indicator_codes)} selected")
+        if settings.start_year is not None or settings.end_year is not None:
+            start = settings.start_year if settings.start_year is not None else "min"
+            end = settings.end_year if settings.end_year is not None else "max"
+            lines.append(f"Date range: {start} to {end}")
+    set_interactive_summary(lines)
+
+
+def _resolve_date_range(
+    settings: RuntimeSettings,
+    client: ImfWeoClient,
+    country_codes: list[str],
+    indicator_codes: list[str],
+    frequency: str,
+) -> tuple[int | None, int | None]:
+    start_year = settings.start_year
+    end_year = settings.end_year
+
+    if start_year is not None and end_year is not None:
+        _validate_date_range(start_year, end_year)
+        return start_year, end_year
+
+    if not settings.interactive:
+        if start_year is not None and end_year is not None:
+            _validate_date_range(start_year, end_year)
+        return start_year, end_year
+
+    available_years = _fetch_available_time_periods(client, country_codes, indicator_codes, frequency)
+    if not available_years:
+        if start_year is not None and end_year is not None:
+            _validate_date_range(start_year, end_year)
+        return start_year, end_year
+
+    if start_year is None and end_year is None and len(available_years) == 1:
+        year = available_years[0]
+        return year, year
+
+    if start_year is None:
+        start_choices = [year for year in available_years if end_year is None or year <= end_year]
+        start_year = _prompt_for_year("Select start year", start_choices)
+
+    if end_year is None:
+        end_choices = [year for year in available_years if year >= start_year]
+        end_year = _prompt_for_year("Select end year", end_choices)
+
+    if start_year is not None and end_year is not None:
+        _validate_date_range(start_year, end_year)
+    return start_year, end_year
+
+
+def _validate_date_range(start_year: int, end_year: int) -> None:
+    if start_year > end_year:
+        raise ValueError(f"Start year {start_year} cannot be later than end year {end_year}.")
+
+
+def _prompt_for_year(title: str, years: list[int]) -> int:
+    if not years:
+        raise ValueError(f"No years are available for {title.lower()}.")
+    if len(years) == 1:
+        return years[0]
+    return int(
+        prompt_for_choice(
+            title,
+            [{"name": str(year), "value": str(year)} for year in years],
+        )
+    )
+
+
 def _resolve_country_first_selection(
     settings: RuntimeSettings,
     catalog: Catalog,
@@ -309,6 +418,7 @@ def _resolve_country_first_selection(
     selected_countries: list[str],
     selected_subjects: list[str],
 ) -> CoreSelectionState:
+    prompted_indicator_codes: list[str] = []
     if settings.interactive and not selected_countries:
         available_country_codes = _available_country_codes(catalog, _fetch_available_location_codes(client, frequency))
         country_totals = _fetch_indicator_availability(
@@ -349,7 +459,7 @@ def _resolve_country_first_selection(
         raise ValueError("No indicators are available for the selected countries and frequency.")
 
     if settings.interactive and not selected_subjects:
-        selected_subjects = _prompt_for_indicator_codes(
+        prompted_indicator_codes = _prompt_for_indicator_codes(
             "Select subject descriptors",
             indicator_availability.available_codes,
             catalog,
@@ -360,10 +470,16 @@ def _resolve_country_first_selection(
                 "location",
             ),
         )
+        selected_subjects = list(prompted_indicator_codes)
     if not selected_subjects:
         raise ValueError("At least one subject descriptor selector is required.")
 
-    indicator_codes = _resolve_indicator_codes(selected_subjects, catalog, legacy, aliases)
+    indicator_codes = list(prompted_indicator_codes) if prompted_indicator_codes else _resolve_indicator_codes(
+        selected_subjects,
+        catalog,
+        legacy,
+        aliases,
+    )
     indicator_codes = _restrict_codes(indicator_codes, indicator_availability.available_codes)
     if not indicator_codes:
         raise ValueError("No matching indicators are available for the selected countries.")
@@ -383,6 +499,8 @@ def _resolve_indicator_first_selection(
     selected_countries: list[str],
     selected_subjects: list[str],
 ) -> CoreSelectionState:
+    prompted_indicator_codes: list[str] = []
+    country_availability: AvailabilityAggregate | None = None
     if settings.interactive and not selected_subjects:
         available_indicator_codes = _fetch_available_indicator_catalog_codes(client, frequency)
         indicator_totals = _fetch_country_availability(
@@ -392,18 +510,33 @@ def _resolve_indicator_first_selection(
             strict=False,
             status_message="Checking subject availability...",
         )
-        selected_subjects = _prompt_for_indicator_codes(
+        positive_indicator_results = [result for result in indicator_totals.results if result.series_count > 0]
+        prompted_indicator_codes = _prompt_for_indicator_codes(
             "Select subject descriptors",
-            available_indicator_codes,
+            [result.requested_code for result in positive_indicator_results],
             catalog,
             legacy,
-            detail_by_code=_build_total_count_details(indicator_totals.results, "location"),
+            detail_by_code=_build_total_count_details(positive_indicator_results, "location"),
+        )
+        selected_subjects = list(prompted_indicator_codes)
+        country_availability = _aggregate_availability_results(
+            [
+                result
+                for result in positive_indicator_results
+                if result.requested_code in prompted_indicator_codes
+            ]
         )
     if not selected_subjects:
         raise ValueError("At least one subject descriptor selector is required.")
 
-    indicator_codes = _resolve_indicator_codes(selected_subjects, catalog, legacy, aliases)
-    country_availability = _fetch_country_availability(client, indicator_codes, frequency)
+    indicator_codes = list(prompted_indicator_codes) if prompted_indicator_codes else _resolve_indicator_codes(
+        selected_subjects,
+        catalog,
+        legacy,
+        aliases,
+    )
+    if country_availability is None:
+        country_availability = _fetch_country_availability(client, indicator_codes, frequency)
     available_country_codes = _available_country_codes(catalog, country_availability.available_codes)
     if not available_country_codes:
         raise ValueError("No countries are available for the selected subject descriptors and frequency.")
@@ -492,7 +625,7 @@ def _resolve_contextual_legacy_filters(
     for subject_label, subject_codes in _group_indicator_codes_by_subject(indicator_codes, legacy):
         choices = _available_legacy_labels(subject_codes, label_map)
         selected_labels: list[str] = []
-        if _subject_requires_prompt(subject_codes, label_map) and choices:
+        if _subject_requires_dimension_prompt(subject_codes, label_map) and choices:
             selected_labels = _resolve_optional_labels(
                 f"Select {dimension_name} for {subject_label}",
                 choices,
@@ -523,12 +656,15 @@ def _group_indicator_codes_by_subject(
     return list(grouped.items())
 
 
-def _subject_requires_prompt(indicator_codes: list[str], label_map: dict[str, set[str]]) -> bool:
-    subject_labels = [_non_empty_legacy_labels(label_map.get(code, set())) for code in indicator_codes]
-    if any(len(labels) > 1 for labels in subject_labels):
-        return True
-    distinct_labels = {next(iter(labels)) for labels in subject_labels if len(labels) == 1}
-    return len(distinct_labels) > 1 and len(indicator_codes) > 1
+def _subject_requires_dimension_prompt(indicator_codes: list[str], label_map: dict[str, set[str]]) -> bool:
+    return any(
+        _indicator_has_multiple_dimension_values(code, label_map)
+        for code in indicator_codes
+    )
+
+
+def _indicator_has_multiple_dimension_values(indicator_code: str, label_map: dict[str, set[str]]) -> bool:
+    return len(_non_empty_legacy_labels(label_map.get(indicator_code, set()))) > 1
 
 
 def _non_empty_legacy_labels(labels: set[str]) -> set[str]:
@@ -648,6 +784,40 @@ def _fetch_available_indicator_catalog_codes(client: ImfWeoClient, frequency: st
     )
 
 
+def _fetch_available_time_periods(
+    client: ImfWeoClient,
+    country_codes: list[str],
+    indicator_codes: list[str],
+    frequency: str,
+    ) -> list[int]:
+    return run_with_status(
+        "Checking available years...",
+        client.fetch_available_time_periods,
+        country_codes=country_codes,
+        indicator_codes=indicator_codes,
+        frequency=frequency,
+    )
+
+
+def _aggregate_availability_results(results: list[AvailabilityResult]) -> AvailabilityAggregate:
+    counts_by_code: dict[str, int] = {}
+    common_codes: set[str] | None = None
+    for result in results:
+        current_codes = set(result.available_codes)
+        for code in current_codes:
+            counts_by_code[code] = counts_by_code.get(code, 0) + 1
+        if common_codes is None:
+            common_codes = current_codes
+        else:
+            common_codes &= current_codes
+    return AvailabilityAggregate(
+        results=results,
+        available_codes=sorted(counts_by_code),
+        common_codes=sorted(common_codes or set()),
+        counts_by_code=dict(sorted(counts_by_code.items())),
+    )
+
+
 def _available_country_codes(catalog: Catalog, available_location_codes: list[str]) -> list[str]:
     available = set(available_location_codes)
     return [code for code in catalog.countries if code in available]
@@ -660,6 +830,8 @@ def _resolve_country_codes(
     aliases: AliasConfig,
     region_membership: RegionMembership,
 ) -> list[str]:
+    if any(str(item).strip() == "*" or normalize_label(item) in {"all", "all countries"} for item in requested):
+        return list(catalog.countries.keys())
     location_codes = _resolve_codes(
         requested=requested,
         current_labels=catalog.locations,
@@ -1107,7 +1279,14 @@ def _ensure_unique_output_path(path: Path) -> Path:
     return candidate
 
 
-def _write_excel_frame(path: Path, dataframe: pd.DataFrame, *, sheet_name: str) -> None:
+def _write_excel_frame(
+    path: Path,
+    dataframe: pd.DataFrame,
+    *,
+    sheet_name: str,
+    header_frequency: str | None = None,
+    fixed_header_columns: int = 0,
+) -> None:
     with pd.ExcelWriter(
         path,
         engine="openpyxl",
@@ -1115,6 +1294,13 @@ def _write_excel_frame(path: Path, dataframe: pd.DataFrame, *, sheet_name: str) 
         datetime_format="YYYY-MM-DD",
     ) as writer:
         dataframe.to_excel(writer, sheet_name=sheet_name, index=False)
+        if header_frequency:
+            worksheet = writer.book[sheet_name]
+            _convert_period_header_cells(
+                worksheet,
+                frequency=header_frequency,
+                fixed_header_columns=fixed_header_columns,
+            )
 
 
 def _normalize_excel_frame(dataframe: pd.DataFrame) -> pd.DataFrame:
@@ -1167,3 +1353,59 @@ def _coerce_excel_numeric_series(series: pd.Series) -> pd.Series:
 def _coerce_excel_date_series(series: pd.Series) -> pd.Series:
     cleaned = series.replace("", pd.NA)
     return pd.to_datetime(cleaned, errors="coerce")
+
+
+def _convert_period_header_cells(worksheet: Any, *, frequency: str, fixed_header_columns: int) -> None:
+    for column_index in range(fixed_header_columns + 1, worksheet.max_column + 1):
+        cell = worksheet.cell(row=1, column=column_index)
+        parsed = _parse_period_header_to_datetime(cell.value, frequency)
+        if parsed is None:
+            continue
+        cell.value = parsed
+        cell.number_format = "yyyy-mm-dd"
+
+
+def _parse_period_header_to_datetime(value: Any, frequency: str) -> datetime | None:
+    if value in {None, ""}:
+        return None
+
+    normalized_frequency = str(frequency or "").strip().upper()
+    text = str(value).strip()
+    if not text:
+        return None
+
+    if normalized_frequency == "A":
+        if re.fullmatch(r"\d{4}", text):
+            return datetime(int(text), 12, 31)
+        return None
+
+    if normalized_frequency == "Q":
+        match = re.fullmatch(r"(\d{4})[- ]?Q([1-4])", text)
+        if match is None:
+            return None
+        year = int(match.group(1))
+        quarter = int(match.group(2))
+        month = quarter * 3
+        return _end_of_month(year, month)
+
+    if normalized_frequency == "M":
+        match = re.fullmatch(r"(\d{4})(?:[-/ ]|M)(\d{1,2})", text)
+        if match is None:
+            return None
+        year = int(match.group(1))
+        month = int(match.group(2))
+        if month < 1 or month > 12:
+            return None
+        return _end_of_month(year, month)
+
+    if normalized_frequency == "D":
+        parsed = pd.to_datetime(text, errors="coerce")
+        if pd.isna(parsed):
+            return None
+        return parsed.to_pydatetime()
+
+    return None
+
+
+def _end_of_month(year: int, month: int) -> datetime:
+    return datetime(year, month, monthrange(year, month)[1])

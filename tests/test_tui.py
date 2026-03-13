@@ -5,6 +5,7 @@ from prompt_toolkit.widgets import Frame
 from prompt_toolkit.data_structures import Point
 from prompt_toolkit.mouse_events import MouseButton, MouseEvent, MouseEventType
 
+import weo_tools.tui as tui
 from weo_tools.tui import Choice, SearchableMultiSelect
 
 
@@ -142,17 +143,57 @@ def test_searchable_multiselect_builds_named_layout_sections() -> None:
     assert isinstance(prompt.error_window, ConditionalContainer)
 
 
-def test_render_choices_includes_detail_suffix() -> None:
+def test_searchable_multiselect_renders_summary_and_status() -> None:
+    prompt = SearchableMultiSelect(
+        "Select countries",
+        [
+            Choice(name="United Kingdom [GBR]", value="GBR"),
+        ],
+    )
+    prompt.set_summary_lines(["Frequency: A", "Countries: 2 selected"])
+    prompt.set_status("Checking available countries...", loading=True)
+
+    assert "Frequency: A" in str(prompt._render_summary()[0][1])
+    assert "Checking available countries..." in str(prompt._render_status()[0][1])
+
+
+def test_render_choices_renders_detail_in_separate_column() -> None:
     prompt = SearchableMultiSelect(
         "Select countries",
         [
             Choice(name="United Kingdom [GBR]", value="GBR", detail="2/3 subjects"),
         ],
     )
+    prompt.cursor = -1
 
     fragments = prompt._render_choices()
 
-    assert any("2/3 subjects" in str(fragment[1]) for fragment in fragments)
+    assert any(fragment[0] == "class:detail" and "2/3 subjects" in str(fragment[1]) for fragment in fragments)
+    assert not any(
+        fragment[0] != "class:detail" and "United Kingdom [GBR]  2/3 subjects" in str(fragment[1])
+        for fragment in fragments
+    )
+
+
+def test_render_choices_wraps_long_labels_without_losing_detail(monkeypatch) -> None:
+    prompt = SearchableMultiSelect(
+        "Select countries",
+        [
+            Choice(
+                name="A very long country label that should wrap inside the matches window without losing its detail",
+                value="LONG",
+                detail="2/3 subjects",
+            ),
+        ],
+    )
+    monkeypatch.setattr(prompt, "_render_width", lambda: 48)
+    prompt.cursor = -1
+
+    rows = _split_rows(prompt._render_choices())
+
+    assert len(rows) > 1
+    assert any(fragment[0] == "class:detail" and "2/3 subjects" in str(fragment[1]) for fragment in rows[0])
+    assert any("should wrap" in str(fragment[1]) for row in rows for fragment in row)
 
 
 def test_select_visible_only_selects_filtered_rows() -> None:
@@ -170,6 +211,26 @@ def test_select_visible_only_selects_filtered_rows() -> None:
     prompt._select_visible()
 
     assert prompt._selected_values() == ["GBR", "USA"]
+
+
+def test_loading_state_disables_selection_interactions() -> None:
+    prompt = SearchableMultiSelect(
+        "Select countries",
+        [
+            Choice(name="United Kingdom [GBR]", value="GBR"),
+            Choice(name="United States [USA]", value="USA"),
+        ],
+        required=False,
+    )
+    prompt.set_status("Checking available countries...", loading=True)
+
+    prompt._move(1)
+    prompt._toggle_current()
+    prompt._select_visible()
+    prompt._clear_visible()
+
+    assert prompt.cursor == 0
+    assert prompt._selected_values() == []
 
 
 def test_clear_visible_only_clears_filtered_rows() -> None:
@@ -239,6 +300,58 @@ def test_matches_window_uses_terminal_height_without_fixed_max() -> None:
 
     assert prompt.list_window.height.min == 10
     assert prompt.list_window.height.max > 1000
+
+
+def test_searchable_multiselect_exposes_terminal_classic_theme_styles() -> None:
+    prompt = SearchableMultiSelect(
+        "Select countries",
+        [
+            Choice(name="United Kingdom [GBR]", value="GBR"),
+        ],
+    )
+    style_names = {name for name, _value in prompt.style.style_rules}
+
+    assert {"active", "checked", "detail", "detail-active", "status", "error"} <= style_names
+
+
+def test_prompt_helpers_use_active_session() -> None:
+    class FakeSession:
+        def prompt(self, *, title, choices, required, max_selections):
+            assert title == "Select countries"
+            assert required is False
+            assert max_selections is None
+            assert [choice.value for choice in choices] == ["GBR"]
+            return ["GBR"]
+
+    previous = tui._ACTIVE_SESSION
+    tui._ACTIVE_SESSION = FakeSession()
+    try:
+        assert tui.prompt_for_choices(
+            "Select countries",
+            [{"name": "United Kingdom [GBR]", "value": "GBR"}],
+            required=False,
+        ) == ["GBR"]
+    finally:
+        tui._ACTIVE_SESSION = previous
+
+
+def test_run_with_status_uses_active_session() -> None:
+    calls: list[str] = []
+
+    class FakeSession:
+        def run_task(self, message, func, /, *args, **kwargs):
+            calls.append(message)
+            return func(*args, **kwargs)
+
+    previous = tui._ACTIVE_SESSION
+    tui._ACTIVE_SESSION = FakeSession()
+    try:
+        result = tui.run_with_status("Checking available countries...", lambda value: value + 1, 2)
+    finally:
+        tui._ACTIVE_SESSION = previous
+
+    assert calls == ["Checking available countries..."]
+    assert result == 3
 
 
 def test_no_matches_disables_cursor_movement() -> None:

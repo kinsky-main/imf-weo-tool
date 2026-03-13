@@ -107,7 +107,37 @@ def test_build_dataframe_normalizes_sdmx_response() -> None:
     assert list(dataframe["Subject Descriptor"].unique()) == ["Gross domestic product, current prices"]
     assert list(dataframe["Units"].unique()) == ["U.S. dollars"]
     assert list(dataframe["Scale"].unique()) == ["Billions"]
-    assert dataframe["obs_value"].tolist() == [3644636000000.0, 3958780000000.0]
+    assert dataframe["obs_value"].tolist() == [3644.636, 3958.78]
+
+
+def test_build_dataframe_leaves_unscaled_series_in_base_units() -> None:
+    csv_frame = pd.DataFrame(
+        [
+            {
+                "COUNTRY": "GBR",
+                "INDICATOR": "PCPIPCH",
+                "FREQUENCY": "A",
+                "TIME_PERIOD": "2024",
+                "OBS_VALUE": "4.25",
+                "SCALE": "0",
+                "COUNTRY_UPDATE_DATE": "9/13/2025",
+            },
+        ]
+    )
+
+    dataframe = _build_dataframe(
+        csv_frame=csv_frame,
+        dataset_version="9.0.0",
+        country_labels={"GBR": "United Kingdom"},
+        subject_labels={"PCPIPCH": "Inflation, average consumer prices"},
+        unit_labels={"PCH": "Percent change"},
+        scale_labels={"0": "Units"},
+        indicator_unit_labels={"PCPIPCH": "Percent change"},
+        indicator_unit_codes={"PCPIPCH": "PCH"},
+        indicator_scale_labels={"PCPIPCH": "Units"},
+    )
+
+    assert dataframe.iloc[0]["obs_value"] == 4.25
 
 
 def test_pivot_for_excel_creates_wide_year_columns() -> None:
@@ -201,6 +231,27 @@ def test_run_excel_export_writes_numeric_year_cells(monkeypatch) -> None:
     assert sheet["E2"].data_type == "n"
     assert sheet["F2"].value is None
     assert sheet["E2"].value == 3644.636
+
+
+def test_run_excel_export_converts_wide_period_headers_to_excel_dates(monkeypatch) -> None:
+    settings = RuntimeSettings(
+        countries=["GBR"],
+        subject_descriptors=["NGDPD"],
+        output_path=str(_output_path("weo_export_headers.xlsx")),
+    )
+    client = ExcelClient()
+
+    monkeypatch.setattr("weo_tools.app.run_with_status", lambda message, func, /, *args, **kwargs: func(*args, **kwargs))
+
+    path = run_excel_export(settings, client)
+
+    workbook = load_workbook(path)
+    sheet = workbook["WEO Data"]
+
+    assert sheet["E1"].data_type == "d"
+    assert isinstance(sheet["E1"].value, datetime)
+    assert sheet["E1"].value.date().isoformat() == "2024-12-31"
+    assert sheet["E1"].number_format == "yyyy-mm-dd"
 
 
 def test_run_excel_export_generates_informative_unique_filenames(monkeypatch, tmp_path: Path) -> None:

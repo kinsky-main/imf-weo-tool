@@ -18,12 +18,14 @@ class DummyClient:
         available_location_codes: list[str] | None = None,
         available_indicator_catalog_codes: list[str] | None = None,
         available_frequency_codes: list[str] | None = None,
+        available_time_periods: list[int] | None = None,
     ) -> None:
         self.indicator_availability_by_country = indicator_availability_by_country or {}
         self.country_availability_by_indicator = country_availability_by_indicator or {}
         self.available_location_codes = list(available_location_codes or [])
         self.available_indicator_catalog_codes = list(available_indicator_catalog_codes or [])
         self.available_frequency_codes = list(available_frequency_codes or ["A"])
+        self.available_time_periods = list(available_time_periods or [])
 
     def fetch_indicator_availability(
         self,
@@ -55,6 +57,15 @@ class DummyClient:
 
     def fetch_available_frequency_codes(self) -> list[str]:
         return list(self.available_frequency_codes)
+
+    def fetch_available_time_periods(
+        self,
+        country_codes: list[str],
+        indicator_codes: list[str],
+        frequency: str,
+    ) -> list[int]:
+        del country_codes, indicator_codes, frequency
+        return list(self.available_time_periods)
 
 
 def _aggregate(values: list[str], mapping: dict[str, list[str]]) -> AvailabilityAggregate:
@@ -214,6 +225,66 @@ def test_resolve_frequency_code_auto_skips_single_available_frequency(monkeypatc
     assert resolved == "A"
 
 
+def test_resolve_date_range_prompts_for_missing_start_and_end_years(monkeypatch) -> None:
+    settings = RuntimeSettings(interactive=True)
+    prompts: list[tuple[str, list[str]]] = []
+
+    def fake_prompt_for_choice(title: str, choices: list[dict[str, str]]) -> str:
+        prompts.append((title, [choice["value"] for choice in choices]))
+        return choices[0]["value"] if title == "Select start year" else choices[-1]["value"]
+
+    monkeypatch.setattr(app, "prompt_for_choice", fake_prompt_for_choice)
+    monkeypatch.setattr(app, "run_with_status", lambda message, func, /, *args, **kwargs: func(*args, **kwargs))
+
+    start_year, end_year = app._resolve_date_range(
+        settings,
+        DummyClient(available_time_periods=[2022, 2023, 2024]),
+        ["GBR"],
+        ["NGDPD"],
+        "A",
+    )
+
+    assert (start_year, end_year) == (2022, 2024)
+    assert prompts == [
+        ("Select start year", ["2022", "2023", "2024"]),
+        ("Select end year", ["2022", "2023", "2024"]),
+    ]
+
+
+def test_resolve_date_range_constrains_end_year_choices_by_selected_start(monkeypatch) -> None:
+    settings = RuntimeSettings(interactive=True, start_year=2023)
+    captured_choices: dict[str, list[str]] = {}
+
+    def fake_prompt_for_choice(title: str, choices: list[dict[str, str]]) -> str:
+        captured_choices[title] = [choice["value"] for choice in choices]
+        return choices[-1]["value"]
+
+    monkeypatch.setattr(app, "prompt_for_choice", fake_prompt_for_choice)
+    monkeypatch.setattr(app, "run_with_status", lambda message, func, /, *args, **kwargs: func(*args, **kwargs))
+
+    start_year, end_year = app._resolve_date_range(
+        settings,
+        DummyClient(available_time_periods=[2021, 2022, 2023, 2024]),
+        ["GBR"],
+        ["NGDPD"],
+        "A",
+    )
+
+    assert (start_year, end_year) == (2023, 2024)
+    assert captured_choices["Select end year"] == ["2023", "2024"]
+
+
+def test_resolve_date_range_rejects_reversed_years() -> None:
+    with pytest.raises(ValueError, match="Start year 2025 cannot be later than end year 2024"):
+        app._resolve_date_range(
+            RuntimeSettings(start_year=2025, end_year=2024),
+            DummyClient(),
+            ["GBR"],
+            ["NGDPD"],
+            "A",
+        )
+
+
 def test_resolve_selections_country_first_prompts_regions_then_countries(monkeypatch) -> None:
     settings = RuntimeSettings(interactive=True)
     client = DummyClient(
@@ -286,8 +357,58 @@ def test_resolve_selections_indicator_first_prompts_regions_then_countries(monke
     assert selections.indicator_codes == ["NGDPD"]
 
 
+def test_resolve_selections_indicator_first_filters_zero_availability_subject_rows(monkeypatch) -> None:
+    settings = RuntimeSettings(interactive=True)
+    client = DummyClient(
+        country_availability_by_indicator={
+            "NGDPD": ["AUT", "GBR"],
+            "NGDP": [],
+        },
+        available_indicator_catalog_codes=["NGDPD", "NGDP"],
+    )
+
+    monkeypatch.setattr(app, "prompt_for_choice", lambda title, choices: app.INDICATOR_FIRST)
+
+    def fake_prompt_for_choices(title: str, choices: list[dict[str, str]], required: bool = True) -> list[str]:
+        del required
+        if title == "Select subject descriptors":
+            assert [choice["value"] for choice in choices] == ["NGDPD"]
+            return ["NGDPD"]
+        if title == "Select regions":
+            return []
+        if title == "Select countries":
+            assert [choice["value"] for choice in choices] == ["AUT", "GBR"]
+            return ["GBR"]
+        raise AssertionError(title)
+
+    monkeypatch.setattr(app, "prompt_for_choices", fake_prompt_for_choices)
+    monkeypatch.setattr(app, "run_with_status", lambda message, func, /, *args, **kwargs: func(*args, **kwargs))
+
+    selections = _resolve(settings, client)
+
+    assert selections.country_codes == ["GBR"]
+    assert selections.indicator_codes == ["NGDPD"]
+
+
 def test_resolve_selections_expands_explicit_region_codes_non_interactively(monkeypatch) -> None:
     settings = RuntimeSettings(countries=["U150"], subject_descriptors=["NGDPD"])
+    client = DummyClient(
+        indicator_availability_by_country={
+            "AUT": ["NGDPD"],
+            "GBR": ["NGDPD"],
+        }
+    )
+
+    monkeypatch.setattr(app, "run_with_status", lambda message, func, /, *args, **kwargs: func(*args, **kwargs))
+
+    selections = _resolve(settings, client)
+
+    assert selections.country_codes == ["AUT", "GBR"]
+    assert selections.indicator_codes == ["NGDPD"]
+
+
+def test_resolve_selections_supports_all_country_wildcard_non_interactively(monkeypatch) -> None:
+    settings = RuntimeSettings(countries=["*"], subject_descriptors=["NGDPD"])
     client = DummyClient(
         indicator_availability_by_country={
             "AUT": ["NGDPD"],
@@ -321,7 +442,7 @@ def test_resolve_selections_auto_skips_single_unit_and_scale(monkeypatch) -> Non
     assert selections.scale_codes == []
 
 
-def test_resolve_selections_prompts_when_multiple_units_exist(monkeypatch) -> None:
+def test_resolve_selections_skips_prompt_for_non_ambiguous_mixed_units_within_subject(monkeypatch) -> None:
     settings = RuntimeSettings(
         countries=["GBR"],
         subject_descriptors=["Gross domestic product, current prices"],
@@ -329,22 +450,20 @@ def test_resolve_selections_prompts_when_multiple_units_exist(monkeypatch) -> No
     )
     client = DummyClient(indicator_availability_by_country={"GBR": ["NGDP", "NGDPD"]})
 
-    def fake_prompt_for_choices(title: str, choices: list[dict[str, str]], required: bool = True) -> list[str]:
-        del choices, required
-        if title == "Select units for Gross domestic product, current prices":
-            return ["U.S. dollars"]
-        raise AssertionError(title)
-
-    monkeypatch.setattr(app, "prompt_for_choices", fake_prompt_for_choices)
+    monkeypatch.setattr(
+        app,
+        "prompt_for_choices",
+        lambda title, choices, required=True: (_ for _ in ()).throw(AssertionError(title)),
+    )
     monkeypatch.setattr(app, "run_with_status", lambda message, func, /, *args, **kwargs: func(*args, **kwargs))
 
     selections = _resolve(settings, client)
 
-    assert selections.indicator_codes == ["NGDPD"]
-    assert selections.unit_codes == ["USD"]
+    assert selections.indicator_codes == ["NGDP", "NGDPD"]
+    assert selections.unit_codes == ["XDC", "USD"]
 
 
-def test_resolve_selections_keeps_unrelated_single_option_series_when_prompting_units(monkeypatch) -> None:
+def test_resolve_selections_keeps_unrelated_single_option_series_without_prompting_units(monkeypatch) -> None:
     settings = RuntimeSettings(
         countries=["GBR"],
         subject_descriptors=["Gross domestic product, current prices", "Inflation, average consumer prices"],
@@ -352,19 +471,17 @@ def test_resolve_selections_keeps_unrelated_single_option_series_when_prompting_
     )
     client = DummyClient(indicator_availability_by_country={"GBR": ["NGDP", "NGDPD", "PCPIPCH"]})
 
-    def fake_prompt_for_choices(title: str, choices: list[dict[str, str]], required: bool = True) -> list[str]:
-        del choices, required
-        if title == "Select units for Gross domestic product, current prices":
-            return ["U.S. dollars"]
-        raise AssertionError(title)
-
-    monkeypatch.setattr(app, "prompt_for_choices", fake_prompt_for_choices)
+    monkeypatch.setattr(
+        app,
+        "prompt_for_choices",
+        lambda title, choices, required=True: (_ for _ in ()).throw(AssertionError(title)),
+    )
     monkeypatch.setattr(app, "run_with_status", lambda message, func, /, *args, **kwargs: func(*args, **kwargs))
 
     selections = _resolve(settings, client)
 
-    assert selections.indicator_codes == ["NGDPD", "PCPIPCH"]
-    assert selections.unit_codes == ["USD", "PCH"]
+    assert selections.indicator_codes == ["NGDP", "NGDPD", "PCPIPCH"]
+    assert selections.unit_codes == ["XDC", "USD", "PCH"]
 
 
 def test_resolve_selections_skips_prompt_for_non_ambiguous_mixed_units(monkeypatch) -> None:
@@ -385,3 +502,51 @@ def test_resolve_selections_skips_prompt_for_non_ambiguous_mixed_units(monkeypat
     selections = _resolve(settings, client)
 
     assert selections.indicator_codes == ["PCPIPCH", "LP"]
+
+
+def test_resolve_unit_scale_filters_prompts_only_for_true_scale_ambiguity(monkeypatch) -> None:
+    legacy = _legacy()
+    legacy.indicator_scales["LP"] = {"Units", "Billions"}
+    legacy.preferred_scale_labels["LP"] = "Units"
+    prompts: list[str] = []
+
+    def fake_prompt_for_choices(title: str, choices: list[dict[str, str]], required: bool = True) -> list[str]:
+        del choices, required
+        prompts.append(title)
+        return ["Units"]
+
+    monkeypatch.setattr(app, "prompt_for_choices", fake_prompt_for_choices)
+
+    filters = app._resolve_unit_scale_filters(
+        RuntimeSettings(interactive=True),
+        ["LP"],
+        legacy,
+    )
+
+    assert prompts == ["Select scales for Population"]
+    assert filters.indicator_codes == ["LP"]
+    assert filters.selected_scales == ["Units"]
+
+
+def test_resolve_unit_scale_filters_prompts_only_for_true_unit_ambiguity(monkeypatch) -> None:
+    legacy = _legacy()
+    legacy.indicator_units["LP"] = {"Millions", "Persons"}
+    legacy.preferred_unit_labels["LP"] = "Millions"
+    prompts: list[str] = []
+
+    def fake_prompt_for_choices(title: str, choices: list[dict[str, str]], required: bool = True) -> list[str]:
+        del choices, required
+        prompts.append(title)
+        return ["Millions"]
+
+    monkeypatch.setattr(app, "prompt_for_choices", fake_prompt_for_choices)
+
+    filters = app._resolve_unit_scale_filters(
+        RuntimeSettings(interactive=True),
+        ["LP"],
+        legacy,
+    )
+
+    assert prompts == ["Select units for Population"]
+    assert filters.indicator_codes == ["LP"]
+    assert filters.selected_units == ["Millions"]

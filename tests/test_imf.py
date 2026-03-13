@@ -125,6 +125,24 @@ def test_fetch_available_frequency_codes_uses_batched_frequency_query(monkeypatc
     assert recorded_keys == ["*.*.*"]
 
 
+def test_fetch_available_time_periods_reads_and_caches_sorted_years(monkeypatch) -> None:
+    client = ImfWeoClient()
+    calls: list[tuple[list[str], list[str], str]] = []
+
+    def fake_fetch_batched_dataframe(*, country_codes, indicator_codes, frequency):
+        calls.append((list(country_codes), list(indicator_codes), frequency))
+        return pd.DataFrame({"TIME_PERIOD": ["2024", "2022", "2024", "bad", None]})
+
+    monkeypatch.setattr(client, "_fetch_batched_dataframe", fake_fetch_batched_dataframe)
+
+    first = client.fetch_available_time_periods(["GBR"], ["NGDPD"], "A")
+    second = client.fetch_available_time_periods(["GBR"], ["NGDPD"], "A")
+
+    assert first == [2022, 2024]
+    assert second == [2022, 2024]
+    assert calls == [(["GBR"], ["NGDPD"], "A")]
+
+
 def test_extract_series_count_reads_annotation_title() -> None:
     payload = _availability_payload("COUNTRY", ["GBR"], 44)
 
